@@ -2367,7 +2367,15 @@ ssize_t sockinfo_tcp::rx(const rx_call_t call_type, iovec *p_iov, ssize_t sz_iov
         }
 #endif /* DEFINED_UTLS */
 
-        total_rx = dequeue_packet(p_iov, sz_iov, __from, __fromlen, in_flags, &out_flags);
+        static long long int counter = 0;
+        if (is_outgoing() && is_connected()) {
+            counter++;
+            if (counter == 1000) {
+                si_tcp_loginfo("IFTAH - start skipping memcpy...");
+            }
+        }
+        total_rx = dequeue_packet(p_iov, sz_iov, __from, __fromlen, in_flags, &out_flags,
+                                  is_outgoing() && is_connected() && counter >= 1000);
         if (total_rx < 0) {
             unlock_tcp_con();
             return total_rx;
