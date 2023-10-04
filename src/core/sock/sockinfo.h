@@ -458,8 +458,8 @@ protected:
             std::max(m_socket_stats.strq_counters.n_strq_max_strides_per_packet, packet_strides);
     }
 
-    inline int dequeue_packet(iovec* p_iov, ssize_t sz_iov, sockaddr* __from, socklen_t* __fromlen,
-                              int in_flags, int* p_out_flags, bool skip_copy = false)
+    inline int dequeue_packet(iovec *p_iov, ssize_t sz_iov, sockaddr *__from, socklen_t *__fromlen,
+                              int in_flags, int *p_out_flags)
     {
         mem_buf_desc_t *pdesc;
         int total_rx = 0;
@@ -502,22 +502,7 @@ protected:
                     if (nbytes > bytes_left) {
                         nbytes = bytes_left;
                     }
-                    if (skip_copy) {
-                        if (pos == 0) {
-                            memcpy((char*)(p_iov[i].iov_base) + pos, iov_base, nbytes);
-                        } else {
-                            // static int pos_counter = 0;
-                            // static int pos_counter2 = 0;
-                            // if (++pos_counter % 1000 == 0) {
-                            //     printf("IFTAH - pos!=0, times=%d, out of %d\n", pos_counter,
-                            //     pos_counter2);
-                            // } else {
-                            //     pos_counter2++;
-                            // }
-                        }
-                    } else {
-                        memcpy((char*)(p_iov[i].iov_base) + pos, iov_base, nbytes);
-                    }
+                    memcpy((char *)(p_iov[i].iov_base) + pos, iov_base, nbytes);
                     pos += nbytes;
                     total_rx += nbytes;
                     m_rx_pkt_ready_offset += nbytes;
