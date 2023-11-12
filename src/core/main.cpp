@@ -889,9 +889,12 @@ void print_xlio_global_settings()
     VLOG_PARAM_STRING("Lock Type", safe_mce_sys().multilock, MCE_DEFAULT_MULTILOCK,
                       SYS_VAR_MULTILOCK,
                       (safe_mce_sys().multilock == MULTILOCK_SPIN ? "Spin " : "Mutex"));
+    VLOG_PARAM_NUMBER("OS events in epoll", safe_mce_sys().os_events_in_internal_thread_epoll,
+                      MCE_OS_EVENTS_IN_EPOLL, SYS_VAR_OS_EVENTS_IN_EPOLL);
 
     vlog_printf(VLOG_INFO,
                 "---------------------------------------------------------------------------\n");
+
 }
 
 void prepare_fork()

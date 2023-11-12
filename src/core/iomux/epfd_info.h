@@ -152,5 +152,6 @@ private:
     epoll_stats_t *m_stats;
     int m_log_invalid_events;
     bool m_b_os_data_available; // true when non offloaded data is available
+    bool use_os_events_in_internal_thread_epoll;
 };
 #endif /* _EPFD_INFO_H */
