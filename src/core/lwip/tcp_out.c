@@ -1629,16 +1629,6 @@ err_t tcp_output(struct tcp_pcb *pcb)
     }
     seg = pcb->unsent;
 
-    /* If the TF_ACK_NOW flag is set and no data will be sent (either
-     * because the ->unsent queue is empty or because the window does
-     * not allow it), construct an empty ACK segment and send it.
-     *
-     * If data is to be sent, we will just piggyback the ACK (see below).
-     */
-    if ((pcb->flags & TF_ACK_NOW) && (seg == NULL || seg->seqno - pcb->lastack + seg->len > wnd)) {
-        return tcp_send_empty_ack(pcb);
-    }
-
 #if TCP_OUTPUT_DEBUG
     if (seg == NULL) {
         LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output: nothing to send (%p)\n", (void *)pcb->unsent));
@@ -1809,6 +1799,12 @@ err_t tcp_output(struct tcp_pcb *pcb)
 #if TCP_OVERSIZE
         pcb->unsent_oversize = 0;
 #endif /* TCP_OVERSIZE */
+    }
+
+    /* Send empty ACK if TF_ACK_NOW was set and no data was sent. */
+    if ((pcb->flags & TF_ACK_NOW) ||
+        (rc != ERR_OK && (seg == pcb->unsent || pcb->is_last_seg_dropped))) {
+        tcp_send_empty_ack(pcb);
     }
 
     pcb->flags &= ~TF_NAGLEMEMERR;
