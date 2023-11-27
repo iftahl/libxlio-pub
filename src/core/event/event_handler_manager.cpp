@@ -936,6 +936,8 @@ The main loop actions:
     5) handle new events
 */
 
+long int counter2 = 0;
+
 void *event_handler_manager::thread_loop()
 {
     int timeout_msec;
@@ -1052,6 +1054,9 @@ void *event_handler_manager::thread_loop()
 
             event_handler_map_t::iterator i = m_event_handler_map.find(fd);
             if (i == m_event_handler_map.end()) {
+                if (counter2++ % 2000 == 0) {
+                    printf("IFTAH - counter=%ld\n", counter2);
+                }
                 // No event handler - this is probably a poll_os event!
                 if (safe_mce_sys().os_events_in_internal_thread_epoll &&
                     !g_p_fd_collection->set_immediate_os_sample(fd)) {
