@@ -647,6 +647,7 @@ bool sockinfo_tcp::prepare_to_close(bool process_shutdown /* = false */)
     }
 
     m_state = SOCKINFO_CLOSING;
+    si_tcp_loginfo("IFTAH - EPOLLHUP");
     NOTIFY_ON_EVENTS(this, EPOLLHUP);
 
     do_wakeup();
@@ -924,6 +925,7 @@ static inline bool tcp_wnd_unavalable(const tcp_pcb &pcb, size_t total_iov_len)
 ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
 {
     iovec *p_iov = tx_arg.attr.iov;
+    // void *first_tx_ptr = p_iov[0].iov_base;
     size_t sz_iov = tx_arg.attr.sz_iov;
     struct sockaddr *__dst = tx_arg.attr.addr;
     socklen_t __dstlen = tx_arg.attr.len;
@@ -1020,10 +1022,18 @@ retry_is_ready:
     }
 
     si_tcp_logfunc("tx: iov=%p niovs=%zu", p_iov, sz_iov);
+    // si_tcp_loginfo("tx: iov=%p niovs=%zu, is_send_zerocopy=%d", p_iov, sz_iov, is_send_zerocopy);
 
     size_t total_iov_len =
         std::accumulate(&p_iov[0], &p_iov[sz_iov], 0U,
                         [](size_t sum, const iovec &curr) { return sum + curr.iov_len; });
+
+    // if (is_send_zerocopy) {
+    //     for (size_t i = 0; i < sz_iov; i++) {
+    //         si_tcp_loginfo("IFTAH - io#%d: total_iov_len=%zu, p=%p", i, total_iov_len, (void*)(p_iov[0].iov_base));
+    //     }
+    // }
+    
     lock_tcp_con();
 
     if (cannot_do_requested_dummy_send(m_pcb, tx_arg) ||
@@ -1033,6 +1043,12 @@ retry_is_ready:
         errno = EAGAIN;
         return -1;
     }
+
+    // for (tcp_seg* temp_s = m_pcb.unsent; temp_s; temp_s = temp_s->next) {
+    //     if (temp_s->len == 2160 && temp_s->flags & TF_SEG_OPTS_ZEROCOPY) {
+    //         si_tcp_loginfo("IFTAH - 1 p=%p, is_zc=%d",temp_s->p->payload, is_send_zerocopy);
+    //     }
+    // }
 
     int total_tx = 0;
     __off64_t file_offset = 0;
@@ -1052,6 +1068,7 @@ retry_is_ready:
                 tx_arg.priv.mkey = pd_key_array[i].mkey;
             }
         }
+
         unsigned pos = 0;
         while (pos < p_iov[i].iov_len) {
             unsigned tx_size = tcp_sndbuf(&m_pcb);
@@ -1116,7 +1133,14 @@ retry_is_ready:
                     ~m_user_huge_page_mask + 1 - ((uint64_t)tx_ptr & ~m_user_huge_page_mask);
                 if (tx_size > remainder) {
                     tx_size = remainder;
+                    // si_tcp_loginfo("cross boundary: tx_size=%u", tx_size);
                 }
+
+                // if ((tx_size & 0x3f) && (tx_size != (tx_size & 0x3f))) {
+                //     unsigned int new_tx_size = tx_size - (tx_size & 0x3f);
+                //     si_tcp_loginfo("tx_size % 64 (%u), new_tx_size=%u", tx_size, new_tx_size);
+                //     new_tx_size = tx_size;
+                // }
             }
         retry_write:
             if (unlikely(!is_rts())) {
@@ -1174,16 +1198,32 @@ retry_is_ready:
 
                 goto retry_write;
             }
+            // if (is_send_zerocopy) {
+            //     si_tcp_loginfo("IFTAH - tx_ptr before=%08p", (void*)(tx_ptr));
+            // }
             if (tx_arg.opcode == TX_FILE && !(apiflags & XLIO_TX_PACKET_ZEROCOPY)) {
                 file_offset += tx_size;
             } else {
                 tx_ptr = (void *)((char *)tx_ptr + tx_size);
             }
+            // if (is_send_zerocopy) {
+            //     si_tcp_loginfo("IFTAH - tx_ptr after =%08p", (void*)(tx_ptr));
+            // }
             pos += tx_size;
             total_tx += tx_size;
         }
     }
 done:
+    // for (tcp_seg* temp_s = m_pcb.unsent; temp_s; temp_s = temp_s->next) {
+    //     if (temp_s->len == 2160 && temp_s->flags & TF_SEG_OPTS_ZEROCOPY) {
+    //         si_tcp_loginfo("IFTAH - 2 p=%p, first_tx_ptr=%p, zc=%d",temp_s->p->payload, first_tx_ptr, is_send_zerocopy);
+    //         for (size_t i = 0; i < sz_iov; i++) {
+    //             si_tcp_loginfo("iov:%d base=%p len=%d", i, p_iov[i].iov_base, p_iov[i].iov_len);
+    //         }
+    //     }
+    // }
+
+
     tcp_output(&m_pcb); // force data out
 
     if (unlikely(is_dummy)) {
@@ -1253,6 +1293,7 @@ err_t sockinfo_tcp::ip_output(struct pbuf *p, struct tcp_seg *seg, void *v_p_con
     xlio_send_attr attr = {(xlio_wr_tx_packet_attr)flags, p_si_tcp->m_pcb.mss, 0, 0};
     int count = 0;
     void *cur_end;
+    // struct pbuf *orig_p = p;
 
     int rc = p_si_tcp->m_ops->postrouting(p, seg, attr);
     if (rc != 0) {
@@ -1315,6 +1356,12 @@ send_iov:
                     max_count);
         return ERR_OK;
     }
+
+    // if (attr.length == 2180 && is_set(attr.flags, XLIO_TX_PACKET_ZEROCOPY)) {
+    //     bool seg_zc_flag = !!(seg->flags & TF_SEG_OPTS_ZEROCOPY);
+    //     vlog_printf(VLOG_INFO, "IFTAH - first iov seg=%p (seg_zc_flag=%d) seg->flow=%d, orig_p->totlen=%u, seg->len=%u, p=%p\n",
+    //     (void*)(seg->p->payload), seg_zc_flag, seg->flow, orig_p->tot_len, seg->len, (void*)(((struct iovec *)lwip_iovec)->iov_base));
+    // }
 
     ssize_t ret = 0;
     if (likely((p_dst->is_valid()))) {
@@ -1470,13 +1517,16 @@ void sockinfo_tcp::err_lwip_cb(void *pcb_container, err_t err)
         PCB_IN_ACTIVE_STATE(&conn->m_pcb)) {
         if (err == ERR_RST) {
             if (conn->m_sock_state == TCP_SOCK_ASYNC_CONNECT) {
+                __log_info("fd=%d, IFTAH - EPOLLHUP 1", conn->m_fd);
                 NOTIFY_ON_EVENTS(conn, (EPOLLIN | EPOLLERR | EPOLLHUP));
             } else {
+                __log_info("fd=%d, IFTAH - EPOLLHUP 2", conn->m_fd);
                 NOTIFY_ON_EVENTS(conn, (EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP));
             }
             /* TODO what about no route to host type of errors, need to add EPOLLERR in this case ?
              */
         } else { // ERR_TIMEOUT
+            __log_info("fd=%d, IFTAH - EPOLLHUP 3", conn->m_fd);
             NOTIFY_ON_EVENTS(conn, (EPOLLIN | EPOLLHUP));
         }
 
@@ -4016,6 +4066,7 @@ int sockinfo_tcp::shutdown(int __how)
             NOTIFY_ON_EVENTS(this, EPOLLIN);
         } else if (is_rtr()) {
             m_sock_state = TCP_SOCK_BOUND;
+            si_tcp_loginfo("IFTAH - EPOLLHUP");
             NOTIFY_ON_EVENTS(this, EPOLLIN | EPOLLHUP);
         } else if (m_sock_state == TCP_SOCK_ACCEPT_READY) {
             m_sock_state = TCP_SOCK_ACCEPT_SHUT;
@@ -4029,6 +4080,7 @@ int sockinfo_tcp::shutdown(int __how)
             m_sock_state = TCP_SOCK_CONNECTED_RD;
         } else if (is_rts()) {
             m_sock_state = TCP_SOCK_BOUND;
+            si_tcp_loginfo("IFTAH - EPOLLHUP");
             NOTIFY_ON_EVENTS(this, EPOLLHUP);
         } else if (is_server()) {
             // ignore SHUT_WR on listen socket

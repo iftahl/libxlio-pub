@@ -140,6 +140,10 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
         m_header->copy_l2_ip_hdr(p_pkt);
 
         uint16_t payload_length_ipv4 = total_packet_len - m_header->m_transport_header_len;
+        // if (payload_length_ipv4 == 2200) {
+        //     dst_tcp_loginfo("IFTAH - 2200 ip payload. sz_iov=%d, is_zerocopy=%d", sz_iov, is_zerocopy);
+        // }
+        bool check_data = ((payload_length_ipv4 == 2200) && is_zerocopy);
         if (get_sa_family() == AF_INET6) {
             fill_hdrs<tx_ipv6_hdr_template_t>(p_pkt, p_ip_hdr, p_tcp_hdr);
             set_ipv6_len(p_ip_hdr, htons(payload_length_ipv4 - IPV6_HLEN));
@@ -218,9 +222,27 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
          * needed for processing send wr completion (tx batching mode)
          */
         ib_ctx_handler *ib_ctx = m_p_ring->get_ctx(m_id);
+        
+        static uint8_t testblock[24] = {};
+        memset(testblock, 0, 24);
+
         for (int i = 0; i < sz_iov; ++i) {
             m_sge[i].addr = (uintptr_t)p_tcp_iov[i].iovec.iov_base;
             m_sge[i].length = p_tcp_iov[i].iovec.iov_len;
+            if (check_data) {
+                // dst_tcp_loginfo("IFTAH - attr.length=%zu, iov #%d: length=%zu, p=%p", attr.length, i, m_sge[i].length, (void*)(m_sge[i].addr));
+                if (/*(i == 0) && */(72 == m_sge[i].length) && ((long unsigned int)(m_sge[i].addr) > 0x200000000000)) {
+                    uint32_t *arr = reinterpret_cast<uint32_t*>(m_sge[i].addr);
+                    if (0 == ntohl(arr[0])) {
+                        dst_tcp_logerr("IFTAH - p=%p iov #%d: data: 0x%08x 0x%08x 0x%08x ", (void*)(m_sge[i].addr), i, ntohl(arr[0]), ntohl(arr[1]), ntohl(arr[2]));
+                    }
+                    // dst_tcp_loginfo("IFTAH - p=%p iov #%d: data: 0x%08x 0x%08x 0x%08x ", (void*)(m_sge[i].addr), i, ntohl(arr[0]), ntohl(arr[1]), ntohl(arr[2]));
+
+                    // dst_tcp_loginfo("IFTAH - iov #%d: data0: 0x%08x", i, ntohl(arr[0]));
+                    // dst_tcp_loginfo("IFTAH - iov #%d: data1: 0x%08x", i, ntohl(arr[1]));
+                    // dst_tcp_loginfo("IFTAH - iov #%d: data2: 0x%08x", i, ntohl(arr[2]));
+                }
+            }
             if (is_zerocopy) {
                 if (PBUF_DESC_MKEY == p_tcp_iov[i].p_desc->lwip_pbuf.pbuf.desc.attr) {
                     /* PBUF_DESC_MKEY - value is provided by user */
@@ -247,6 +269,9 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
                 }
             } else {
                 m_sge[i].lkey = (i == 0 ? m_p_ring->get_tx_lkey(m_id) : m_sge[0].lkey);
+                if (!memcmp(testblock, (uint8_t *)(m_sge[i].addr), 24)) {
+                    dst_tcp_logerr("IFTAH - err, zeros!");
+                }
             }
         }
 
@@ -288,11 +313,21 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
             set_ipv4_len(p_ip_hdr, htons(payload_length_ipv4));
         }
 
+        if (payload_length_ipv4 == 2200) {
+            dst_tcp_loginfo("IFTAH - 2200 ip payload. is_zerocopy=%d", is_zerocopy);
+        }
+
         p_mem_buf_desc->tx.p_ip_h = p_ip_hdr;
         p_mem_buf_desc->tx.p_tcp_h = static_cast<tcphdr *>(p_tcp_hdr);
 
         m_p_send_wqe = &m_not_inline_send_wqe;
         m_p_send_wqe->wr_id = (uintptr_t)p_mem_buf_desc;
+
+        static uint8_t testblock2[24] = {};
+        memset(testblock2, 0, 24);
+        if (!memcmp(testblock2, (uint8_t *)(m_sge[0].addr), 24)) {
+            dst_tcp_logerr("IFTAH - 2 err, zeros!");
+        }
 
         send_ring_buffer(m_id, m_p_send_wqe, attr.flags);
     }

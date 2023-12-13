@@ -305,6 +305,8 @@ struct tcp_seg {
        XLIO requires header pointer to be aligned to 4 bytes boundary.
     */
     u32_t l2_l3_tcphdr_zc[25] __attribute__((aligned(4)));
+
+    int flow;
 };
 
 #define LWIP_IS_DUMMY_SEGMENT(seg) (seg->flags & TF_SEG_OPTS_DUMMY_MSG)

@@ -774,6 +774,8 @@ err_t tcp_enqueue_flags(struct tcp_pcb *pcb, u8_t flags)
         return ERR_MEM;
     }
 
+    printf("IFTAH - tcp_enqueue_flags...\n");
+
     if (flags & TCP_SYN) {
         optflags = TF_SEG_OPTS_MSS;
         if (enable_wnd_scale && ((get_tcp_state(pcb) != SYN_RCVD) || (pcb->flags & TF_WND_SCALE))) {
@@ -1307,6 +1309,7 @@ __attribute__((unused)) static struct tcp_seg *tcp_rexmit_segment(struct tcp_pcb
  */
 void tcp_split_rexmit(struct tcp_pcb *pcb, struct tcp_seg *seg)
 {
+    seg->flow = 4;
     struct tcp_seg *cur_seg = NULL;
     struct tcp_seg *new_seg = NULL;
     struct pbuf *cur_p = NULL;
@@ -1415,6 +1418,7 @@ void tcp_split_segment(struct tcp_pcb *pcb, struct tcp_seg *seg, u32_t wnd)
     }
 
     if (seg->p->len > ((tcp_hlen_delta + optlen) + lentosend)) {
+        seg->flow = 1;
         /* First buffer is too big, split it */
         u32_t lentoqueue = seg->p->len - (tcp_hlen_delta + optlen) - lentosend;
         max_length = is_zerocopy ? lentoqueue + optlen : mss_local;
@@ -1480,6 +1484,7 @@ void tcp_split_segment(struct tcp_pcb *pcb, struct tcp_seg *seg, u32_t wnd)
 #endif /* TCP_OVERSIZE */
         }
     } else if (seg->p->next) {
+        seg->flow = 2;
         /* Segment with more than one pbuffer and seg->p->len <= lentosend
            split segment pbuff chain. At least one pBuffer will be sent */
         struct pbuf *pnewhead = seg->p->next;
@@ -1538,6 +1543,7 @@ void tcp_split_segment(struct tcp_pcb *pcb, struct tcp_seg *seg, u32_t wnd)
 #endif /* TCP_OVERSIZE */
         }
     } else {
+        seg->flow = 3;
         LWIP_ASSERT("tcp_split_segment: We should not be here [else]", 0);
     }
 
@@ -1626,6 +1632,7 @@ err_t tcp_output(struct tcp_pcb *pcb)
         pcb->unsent = pcb->unacked;
         pcb->unacked = NULL;
         pcb->last_unacked = NULL;
+        printf("IFTAH - is_last_seg_dropped\n");
     }
     seg = pcb->unsent;
 
@@ -1657,6 +1664,7 @@ err_t tcp_output(struct tcp_pcb *pcb)
 #endif /* TCP_TSO_DEBUG */
 
     while (seg && rc == ERR_OK) {
+        seg->flow = 0;
         /* TSO segment can be in unsent queue only in case of retransmission.
          * Clear TSO flag, tcp_split_segment() and tcp_tso_segment() will handle
          * all scenarios further.
