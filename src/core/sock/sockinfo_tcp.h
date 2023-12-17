@@ -118,6 +118,14 @@ typedef std::map<tcp_pcb *, int> ready_pcb_map_t;
 typedef std::map<flow_tuple, tcp_pcb *> syn_received_map_t;
 typedef std::map<sock_addr, xlio_desc_list_t> peer_map_t;
 
+struct iovss {
+    iovec *p_iov;
+    size_t sz_iov;
+    int error;
+    size_t completed;
+};
+typedef std::unordered_map<uint32_t, struct iovss *> iovs_map_t;
+
 /* taken from inet_ecn.h in kernel */
 enum inet_ecns {
     INET_ECN_NOT_ECT = 0,
@@ -324,6 +332,9 @@ public:
     list_node<sockinfo_tcp, sockinfo_tcp::accepted_conns_node_offset> accepted_conns_node;
 
     inline void set_reguired_send_block(unsigned sz) { m_required_send_block = sz; }
+
+    iovs_map_t m_iovs_map;
+    std::list<void*> m_free_p_list;
 
 protected:
     virtual void lock_rx_q();
