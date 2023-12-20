@@ -1016,7 +1016,8 @@ retry_is_ready:
     struct ibv_mr *mr = nullptr;
     ring *tx_ring = nullptr;
     ib_ctx_handler *p_ib_ctx_h = nullptr;
-    uint32_t map_ix = (uint32_t)atomic_read(&m_zckey);
+    // uint32_t map_ix = (uint32_t)atomic_read(&m_zckey);
+    uint32_t map_ix = m_zckey.load();
 
     static uint32_t data_exceeds_datal = 0;
     static long int datal = 0;
@@ -1027,12 +1028,16 @@ retry_is_ready:
     size_t start_ix = 0;
     bool check_pdu = true; // (__flags & MSG_ZEROCOPY)
 
+    si_tcp_loginfo("map_ix=%u - total_iov_len=%zu", map_ix, total_iov_len);
+    uint32_t tot_header_sent = 0;
+    uint32_t tot_datal_sent = 0;
+
     if (datal) {
         if (p_iov[0].iov_len <= (uint32_t)datal) {
             datal -= p_iov[0].iov_len;
-            si_tcp_loginfo("start of tx, old_datal=%u new_datal=%u (sending first %u), map_ix=%zu", datal + p_iov[0].iov_len, datal, p_iov[0].iov_len, map_ix);
+            si_tcp_loginfo("start of tx, old_datal=%u new_datal=%u (sending first %u), map_ix=%u", datal + p_iov[0].iov_len, datal, p_iov[0].iov_len, map_ix);
         } else {
-            si_tcp_logerr("datal=%u, iov_len=%u, datal=%ld, map_ix=%zu", datal, p_iov[0].iov_len, datal, map_ix);
+            si_tcp_logerr("datal=%u, iov_len=%u, datal=%ld, map_ix=%u", datal, p_iov[0].iov_len, datal, map_ix);
         }
         start_ix = 1;
     }
@@ -1128,7 +1133,7 @@ retry_is_ready:
                     si_tcp_logerr("unknown type %u, map_ix=%u", arr[0], map_ix);
                     break;
             }
-            // si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
+            si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
         } else {
             if (p_iov[i].iov_len > (uint32_t)datal) {
                 data_exceeds_datal += (p_iov[i].iov_len - datal);
@@ -1136,7 +1141,7 @@ retry_is_ready:
                 datal = 0;
             } else {
                 datal -= p_iov[i].iov_len;
-                // si_tcp_loginfo("datal io %d/%d: len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, map_ix);
+                si_tcp_loginfo("datal io %d/%d: len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, map_ix);
             }
         }
     }
@@ -1474,6 +1479,7 @@ decreased_tx_size:
                 } else {
                     // accumulate datal sent
                     datal_to_be_sent = tx_size;
+                    hlen = 0;
                 }
             }
 
@@ -1537,12 +1543,19 @@ decreased_tx_size:
             // }
             pos += tx_size;
             total_tx += tx_size;
+
             if (datal_to_be_sent) {
                 datal -= datal_to_be_sent;
                 datal_sent_so_far += datal_to_be_sent;
-                si_tcp_loginfo("sent %u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d (len=%u), map_ix=%u", datal_to_be_sent, datal_sent_so_far, datal, i, sz_iov-1, p_iov[i].iov_len, map_ix);
+                tot_datal_sent += datal_to_be_sent;
+                si_tcp_loginfo("datal sent %u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d (len=%u), tot_datal_sent=%u, map_ix=%u", datal_to_be_sent, datal_sent_so_far, datal, i, sz_iov-1, p_iov[i].iov_len, tot_datal_sent, map_ix);
+            } else if (hlen) {
+                tot_header_sent += hlen;
+                if (tx_size != hlen) {
+                    si_tcp_logerr("tx_size(%u) != hlen(%u), io %d/%d, map_ix=%u", tx_size, hlen, i, sz_iov-1, map_ix);
+                }
+                si_tcp_loginfo("header sent %u==%u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d, map_ix=%u", hlen, p_iov[i].iov_len, datal_sent_so_far, datal, i, sz_iov-1, map_ix);
             }
-            
         }
     }
 done:
@@ -1571,7 +1584,7 @@ done:
             si_tcp_loginfo("IFTAH - only %u bytes were sent of iov %zu/%zu, datal=%ld, datal_sent_so_far=%u", pos, i, sz_iov-1, datal, datal_sent_so_far);
         }
         if (datal_sent_so_far && datal_sent_so_far != datal) {
-             si_tcp_loginfo("IFTAH - in the middle of datal iov. sent=%u/%ld", datal_sent_so_far, datal);
+             si_tcp_loginfo("IFTAH - in the middle of datal iov. sent=%u/%ld", datal_sent_so_far, (datal + datal_sent_so_far));
             //  datal -= datal_sent_so_far;
         }
     }
@@ -1592,10 +1605,12 @@ done:
      */
     if (is_send_zerocopy) {
         if (total_tx > 0) {
-            if (m_last_zcdesc->tx.zc.id != (uint32_t)atomic_read(&m_zckey)) {
+            // if (m_last_zcdesc->tx.zc.id != (uint32_t)atomic_read(&m_zckey)) {
+            if (m_last_zcdesc->tx.zc.id != m_zckey.load()) {
                 si_tcp_logerr("Invalid tx zcopy operation");
             } else {
-                atomic_fetch_and_inc(&m_zckey);
+                m_zckey++;
+                // atomic_fetch_and_inc(&m_zckey);
             }
         } else {
             si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
@@ -1623,6 +1638,8 @@ done:
     // if ((int)total_iov_len != total_tx) {
     //     si_tcp_logerr("didnt send all data: %d/%zu", total_tx, total_iov_len);
     // }
+    // si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, (uint32_t)atomic_read(&m_zckey));
+    si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, m_zckey.load());
     return total_tx;
 
 err:
@@ -3977,7 +3994,8 @@ err_t sockinfo_tcp::syn_received_timewait_cb(void *arg, struct tcp_pcb *newpcb)
     new_sock->socket_stats_init();
 
     /* Reset zerocopy state */
-    atomic_set(&new_sock->m_zckey, 0);
+    // atomic_set(&new_sock->m_zckey, 0);
+    new_sock->m_zckey.store(0);
     new_sock->m_last_zcdesc = NULL;
     new_sock->m_b_zc = false;
 
@@ -6054,7 +6072,8 @@ void sockinfo_tcp::tcp_tx_pbuf_free(void *p_conn, struct pbuf *p_buff)
 mem_buf_desc_t *sockinfo_tcp::tcp_tx_zc_alloc(mem_buf_desc_t *p_desc)
 {
     p_desc->m_flags |= mem_buf_desc_t::ZCOPY;
-    p_desc->tx.zc.id = atomic_read(&m_zckey);
+    // p_desc->tx.zc.id = atomic_read(&m_zckey);
+    p_desc->tx.zc.id = m_zckey.load();
     p_desc->tx.zc.count = 1;
     p_desc->tx.zc.len = p_desc->lwip_pbuf.pbuf.len;
     p_desc->tx.zc.ctx = (void *)this;
@@ -6148,6 +6167,9 @@ void sockinfo_tcp::tcp_tx_zc_handle(mem_buf_desc_t *p_desc)
 
     count = p_desc->tx.zc.count;
     lo = p_desc->tx.zc.id;
+    if (lo == 0) {
+        si_tcp_logerr("lo = 0!!!!");
+    }
     hi = lo + count - 1;
     memset(&p_desc->ee, 0, sizeof(p_desc->ee));
     p_desc->ee.ee_errno = 0;

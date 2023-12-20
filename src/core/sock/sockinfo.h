@@ -31,6 +31,7 @@
  */
 
 #include <unordered_map>
+#include <atomic>
 #include <deque>
 #include <ifaddrs.h>
 
@@ -321,7 +322,9 @@ protected:
      * The counter counts system call invocations, not bytes.
      * It wraps after UINT_MAX calls.
      */
-    atomic_t m_zckey;
+    
+    // atomic_t m_zckey;
+    std::atomic<uint64_t> m_zckey;
 
     // Callback function pointer to support VMA extra API (xlio_extra.h)
     xlio_recv_callback_t m_rx_callback;
