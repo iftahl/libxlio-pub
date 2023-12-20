@@ -143,7 +143,7 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
         // if (payload_length_ipv4 == 2200) {
         //     dst_tcp_loginfo("IFTAH - 2200 ip payload. sz_iov=%d, is_zerocopy=%d", sz_iov, is_zerocopy);
         // }
-        bool check_data = 1; //((payload_length_ipv4 == 2200) /*&& is_zerocopy*/);
+        bool check_data = 0; //1; //((payload_length_ipv4 == 2200) /*&& is_zerocopy*/);
         if (get_sa_family() == AF_INET6) {
             fill_hdrs<tx_ipv6_hdr_template_t>(p_pkt, p_ip_hdr, p_tcp_hdr);
             set_ipv6_len(p_ip_hdr, htons(payload_length_ipv4 - IPV6_HLEN));
