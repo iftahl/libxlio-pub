@@ -140,11 +140,6 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
         m_header->copy_l2_ip_hdr(p_pkt);
 
         uint16_t payload_length_ipv4 = total_packet_len - m_header->m_transport_header_len;
-
-        if ((total_packet_len - m_header->m_transport_header_len) > 65535) {
-            dst_tcp_logerr("Overflow!! payload_length_ipv4=%u, but should be %u, but its limited to 65535 (m_header->m_total_hdr_len=%u)", payload_length_ipv4, (total_packet_len - m_header->m_transport_header_len), m_header->m_total_hdr_len);
-        }
-
         // if (payload_length_ipv4 == 2200) {
         //     dst_tcp_loginfo("IFTAH - 2200 ip payload. sz_iov=%d, is_zerocopy=%d", sz_iov, is_zerocopy);
         // }
