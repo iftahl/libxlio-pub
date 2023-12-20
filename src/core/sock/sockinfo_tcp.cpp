@@ -1019,8 +1019,8 @@ retry_is_ready:
     uint32_t map_ix = (uint32_t)atomic_read(&m_zckey);
     // uint32_t map_ix = m_zckey.load();
 
-    static uint32_t data_exceeds_datal = 0;
-    static long int datal = 0;
+    // static uint32_t data_exceeds_datal = 0;
+    // static long int datal = 0;
     uint32_t prev_data_exceeds_datal = data_exceeds_datal;
     uint32_t prev_datal = datal;
     uint32_t act_len = 0;

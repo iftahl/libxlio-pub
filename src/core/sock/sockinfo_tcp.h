@@ -422,6 +422,8 @@ private:
     uint64_t m_user_huge_page_mask;
     unsigned m_required_send_block;
     uint16_t m_external_vlan_tag = 0U;
+    uint32_t data_exceeds_datal = 0;
+    long int datal = 0;
 
     inline void lwip_pbuf_init_custom(mem_buf_desc_t *p_desc);
 
