@@ -647,7 +647,7 @@ bool sockinfo_tcp::prepare_to_close(bool process_shutdown /* = false */)
     }
 
     m_state = SOCKINFO_CLOSING;
-    si_tcp_loginfo("IFTAH - EPOLLHUP");
+    // si_tcp_loginfo("IFTAH - EPOLLHUP");
     NOTIFY_ON_EVENTS(this, EPOLLHUP);
 
     do_wakeup();
@@ -1028,14 +1028,14 @@ retry_is_ready:
     size_t start_ix = 0;
     bool check_pdu = true; // (__flags & MSG_ZEROCOPY)
 
-    si_tcp_loginfo("map_ix=%u - total_iov_len=%zu", map_ix, total_iov_len);
+    // si_tcp_loginfo("map_ix=%u - total_iov_len=%zu", map_ix, total_iov_len);
     uint32_t tot_header_sent = 0;
     uint32_t tot_datal_sent = 0;
 
     if (datal) {
         if (p_iov[0].iov_len <= (uint32_t)datal) {
             datal -= p_iov[0].iov_len;
-            si_tcp_loginfo("start of tx, old_datal=%u new_datal=%u (sending first %u), map_ix=%u", datal + p_iov[0].iov_len, datal, p_iov[0].iov_len, map_ix);
+            // si_tcp_loginfo("start of tx, old_datal=%u new_datal=%u (sending first %u), map_ix=%u", datal + p_iov[0].iov_len, datal, p_iov[0].iov_len, map_ix);
         } else {
             si_tcp_logerr("datal=%u, iov_len=%u, datal=%ld, map_ix=%u", datal, p_iov[0].iov_len, datal, map_ix);
         }
@@ -1133,7 +1133,7 @@ retry_is_ready:
                     si_tcp_logerr("unknown type %u, map_ix=%u", arr[0], map_ix);
                     break;
             }
-            si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
+            // si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
         } else {
             if (p_iov[i].iov_len > (uint32_t)datal) {
                 data_exceeds_datal += (p_iov[i].iov_len - datal);
@@ -1141,7 +1141,7 @@ retry_is_ready:
                 datal = 0;
             } else {
                 datal -= p_iov[i].iov_len;
-                si_tcp_loginfo("datal io %d/%d: len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, map_ix);
+                // si_tcp_loginfo("datal io %d/%d: len=%u, map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, map_ix);
             }
         }
     }
@@ -1460,9 +1460,9 @@ decreased_tx_size:
                     if (hlen) {
                         if (pos == 0) {
                             if (tx_size == hlen) {
-                                si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u - sent exactly full pdu header", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
+                                // si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u - sent exactly full pdu header", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
                             } else if (tx_size < hlen) {
-                                si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u - tx_size<hlen - set tx_size=0", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
+                                // si_tcp_loginfo("io %d/%d (len=%u), type=%u, datal=%ld, act_len=%u, map_ix=%u - tx_size<hlen - set tx_size=0", i, sz_iov-1, p_iov[i].iov_len, arr[0], datal, act_len, map_ix);
                                 tx_size = 0;
                                 datal = 0;
                                 goto decreased_tx_size;
@@ -1499,7 +1499,7 @@ decreased_tx_size:
 #ifdef XLIO_TIME_MEASURE
                     INC_ERR_TX_COUNT;
 #endif
-                    si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
+                    // si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
                     data_exceeds_datal = prev_data_exceeds_datal;
                     datal = prev_datal;
                     return -1;
@@ -1548,13 +1548,13 @@ decreased_tx_size:
                 datal -= datal_to_be_sent;
                 datal_sent_so_far += datal_to_be_sent;
                 tot_datal_sent += datal_to_be_sent;
-                si_tcp_loginfo("datal sent %u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d (len=%u), tot_datal_sent=%u, map_ix=%u", datal_to_be_sent, datal_sent_so_far, datal, i, sz_iov-1, p_iov[i].iov_len, tot_datal_sent, map_ix);
+                // si_tcp_loginfo("datal sent %u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d (len=%u), tot_datal_sent=%u, map_ix=%u", datal_to_be_sent, datal_sent_so_far, datal, i, sz_iov-1, p_iov[i].iov_len, tot_datal_sent, map_ix);
             } else if (hlen) {
                 tot_header_sent += hlen;
                 if (tx_size != hlen) {
                     si_tcp_logerr("tx_size(%u) != hlen(%u), io %d/%d, map_ix=%u", tx_size, hlen, i, sz_iov-1, map_ix);
                 }
-                si_tcp_loginfo("header sent %u==%u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d, map_ix=%u", hlen, p_iov[i].iov_len, datal_sent_so_far, datal, i, sz_iov-1, map_ix);
+                // si_tcp_loginfo("header sent %u==%u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d, map_ix=%u", hlen, p_iov[i].iov_len, datal_sent_so_far, datal, i, sz_iov-1, map_ix);
             }
         }
     }
@@ -1571,21 +1571,20 @@ done:
     // datal = 0;
     if (i == sz_iov) {
         // all data was sent
-        si_tcp_loginfo("IFTAH - all data was sent for this tx, datal=%u", datal);
+        // si_tcp_loginfo("IFTAH - all data was sent for this tx, datal=%u", datal);
     } else {
         if (pos == p_iov[i].iov_len) {
             // all data of iov #i was sent
-            si_tcp_loginfo("IFTAH - all data of iov %zu/%zu was sent, datal=%u, datal_sent_so_far=%u", i, sz_iov-1, datal, datal_sent_so_far);
+            // si_tcp_loginfo("IFTAH - all data of iov %zu/%zu was sent, datal=%u, datal_sent_so_far=%u", i, sz_iov-1, datal, datal_sent_so_far);
         } else if (pos == 0) {
             // no data of iov #i was sent
-            si_tcp_loginfo("IFTAH - no data of iov %zu/%zu was sent, datal=%u, datal_sent_so_far=%u", i, sz_iov-1, datal, datal_sent_so_far);
+            // si_tcp_loginfo("IFTAH - no data of iov %zu/%zu was sent, datal=%u, datal_sent_so_far=%u", i, sz_iov-1, datal, datal_sent_so_far);
         } else {
             // only $pos bytes were sent of iov #i
-            si_tcp_loginfo("IFTAH - only %u bytes were sent of iov %zu/%zu, datal=%ld, datal_sent_so_far=%u", pos, i, sz_iov-1, datal, datal_sent_so_far);
+            // si_tcp_loginfo("IFTAH - only %u bytes were sent of iov %zu/%zu, datal=%ld, datal_sent_so_far=%u", pos, i, sz_iov-1, datal, datal_sent_so_far);
         }
         if (datal_sent_so_far && datal_sent_so_far != datal) {
-             si_tcp_loginfo("IFTAH - in the middle of datal iov. sent=%u/%ld", datal_sent_so_far, (datal + datal_sent_so_far));
-            //  datal -= datal_sent_so_far;
+            //  si_tcp_loginfo("IFTAH - in the middle of datal iov. sent=%u/%ld", datal_sent_so_far, (datal + datal_sent_so_far));
         }
     }
 
@@ -1613,7 +1612,7 @@ done:
                 // atomic_fetch_and_inc(&m_zckey);
             }
         } else {
-            si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
+            // si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
             data_exceeds_datal = prev_data_exceeds_datal;
             datal = prev_datal;
         }
@@ -1639,7 +1638,7 @@ done:
     //     si_tcp_logerr("didnt send all data: %d/%zu", total_tx, total_iov_len);
     // }
     // si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, (uint32_t)atomic_read(&m_zckey));
-    si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, m_zckey.load());
+    // si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, m_zckey.load());
     return total_tx;
 
 err:
@@ -1654,7 +1653,7 @@ err:
         m_p_socket_stats->counters.n_tx_errors++;
     }
     // m_iovs_map[map_ix]->error = 1;
-    si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
+    // si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
     data_exceeds_datal = prev_data_exceeds_datal;
     datal = prev_datal;
     unlock_tcp_con();
