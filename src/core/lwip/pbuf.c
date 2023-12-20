@@ -273,15 +273,17 @@ u8_t pbuf_free(struct pbuf *p)
  * @return the number of pbufs in a chain
  */
 
-u8_t pbuf_clen(struct pbuf *p)
+u16_t pbuf_clen(struct pbuf *p)
 {
-    u8_t len;
+    u16_t len;
 
     len = 0;
     while (p != NULL) {
         ++len;
         p = p->next;
     }
+    LWIP_ERROR("pbuf_clen > 255!!", len < 256, return len);
+    // LWIP_ASSERT("pbuf_clen > 255!!", len < 256 bla bla verify debug);
     return len;
 }
 
