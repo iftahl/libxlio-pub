@@ -248,12 +248,12 @@ set_tcphdr:
  * @param first_seg true when this pbuf will be used in the first enqueued segment.
  * @param
  */
-static struct pbuf *tcp_pbuf_prealloc(u16_t length, u16_t max_length, u16_t *oversize,
+static struct pbuf *tcp_pbuf_prealloc(u32_t length, u32_t max_length, u16_t *oversize,
                                       struct tcp_pcb *pcb, pbuf_type type, u8_t tcp_write_flag_more,
                                       u8_t first_seg, pbuf_desc *desc, struct pbuf *p_buff)
 {
     struct pbuf *p;
-    u16_t alloc = length;
+    u32_t alloc = length;
 
     if (length < max_length) {
         /* Should we allocate an oversized pbuf, or just the minimum
@@ -278,6 +278,9 @@ static struct pbuf *tcp_pbuf_prealloc(u16_t length, u16_t max_length, u16_t *ove
     LWIP_ASSERT("need unchained pbuf", p->next == NULL);
     *oversize = p->len - length;
     /* trim p->len to the currently used size */
+
+    // check p->len as well??
+    LWIP_ERROR("p->len > 65,535!!", length < 65536, );
     p->len = p->tot_len = length;
     return p;
 }
@@ -382,8 +385,8 @@ err_t tcp_write(struct tcp_pcb *pcb, const void *arg, u32_t len, u16_t apiflags,
     u16_t oversize_used = 0;
 #endif /* TCP_OVERSIZE */
     err_t err;
-    u16_t mss_local = 0;
-    u16_t mss_local_minus_opts;
+    u32_t mss_local = 0;
+    u32_t mss_local_minus_opts;
     int tot_p = 0;
     const int piov_max_size = 512;
     const int piov_max_len = 65536;
@@ -462,7 +465,7 @@ err_t tcp_write(struct tcp_pcb *pcb, const void *arg, u32_t len, u16_t apiflags,
 
     /* Find the tail of the unsent queue. */
     if (pcb->unsent != NULL) {
-        u16_t space;
+        u32_t space;
         u16_t unsent_optlen;
 
         if (!pcb->last_unsent || pcb->last_unsent->next) {
@@ -527,7 +530,7 @@ err_t tcp_write(struct tcp_pcb *pcb, const void *arg, u32_t len, u16_t apiflags,
         if (!is_file && (pos < len) && (space > 0) && (pcb->last_unsent->len > 0) &&
             (tot_p < (int)pcb->tso.max_send_sge)) {
 
-            u16_t seglen = space < len - pos ? space : len - pos;
+            u32_t seglen = space < len - pos ? space : len - pos;
             if ((concat_p = tcp_pbuf_prealloc(seglen, space, &oversize, pcb, type,
                                               TCP_WRITE_FLAG_MORE, 1, desc, NULL)) == NULL) {
                 LWIP_DEBUGF(
@@ -564,8 +567,8 @@ err_t tcp_write(struct tcp_pcb *pcb, const void *arg, u32_t len, u16_t apiflags,
     while (pos < len) {
         struct pbuf *p;
         u32_t left = len - pos;
-        u16_t max_len = mss_local_minus_opts;
-        u16_t seglen = left > max_len ? max_len : left;
+        u32_t max_len = mss_local_minus_opts;
+        u32_t seglen = left > max_len ? max_len : left;
 
         /* create pbuf of the exact size needed now, to later avoid the p1 (oversize) flow */
         if (is_zerocopy) {
@@ -1930,6 +1933,7 @@ static err_t tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb)
         p->type = PBUF_STACK;
         p->payload = seg->tcphdr;
         p->next = seg->p;
+        LWIP_ERROR("p->len > 65,535!!", p->tot_len < 65536, );
         p->len = p->tot_len = LWIP_TCP_HDRLEN(seg->tcphdr);
     } else {
         len = (u16_t)((u8_t *)seg->tcphdr - (u8_t *)seg->p->payload);
