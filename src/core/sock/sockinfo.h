@@ -323,8 +323,9 @@ protected:
      * It wraps after UINT_MAX calls.
      */
     
-    // atomic_t m_zckey;
-    std::atomic<uint64_t> m_zckey;
+    atomic_t m_zckey;
+    // std::atomic<uint64_t> m_zckey;
+    bool first_zc_send = true;
 
     // Callback function pointer to support VMA extra API (xlio_extra.h)
     xlio_recv_callback_t m_rx_callback;

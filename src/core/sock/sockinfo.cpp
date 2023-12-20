@@ -120,8 +120,8 @@ sockinfo::sockinfo(int fd, int domain, bool use_ring_locks)
     memset(&m_so_ratelimit, 0, sizeof(xlio_rate_limit_t));
     set_flow_tag(m_fd + 1);
 
-    // atomic_set(&m_zckey, 0);
-    m_zckey.store(0);
+    atomic_set(&m_zckey, 0);
+    // m_zckey.store(0);
     m_last_zcdesc = NULL;
 
     m_socketxtreme.ec_cache.clear();

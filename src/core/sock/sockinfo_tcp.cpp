@@ -1016,8 +1016,8 @@ retry_is_ready:
     struct ibv_mr *mr = nullptr;
     ring *tx_ring = nullptr;
     ib_ctx_handler *p_ib_ctx_h = nullptr;
-    // uint32_t map_ix = (uint32_t)atomic_read(&m_zckey);
-    uint32_t map_ix = m_zckey.load();
+    uint32_t map_ix = (uint32_t)atomic_read(&m_zckey);
+    // uint32_t map_ix = m_zckey.load();
 
     static uint32_t data_exceeds_datal = 0;
     static long int datal = 0;
@@ -1549,7 +1549,7 @@ decreased_tx_size:
                 datal_sent_so_far += datal_to_be_sent;
                 tot_datal_sent += datal_to_be_sent;
                 // si_tcp_loginfo("datal sent %u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d (len=%u), tot_datal_sent=%u, map_ix=%u", datal_to_be_sent, datal_sent_so_far, datal, i, sz_iov-1, p_iov[i].iov_len, tot_datal_sent, map_ix);
-            } else if (hlen) {
+            } else if (check_pdu && hlen) {
                 tot_header_sent += hlen;
                 if (tx_size != hlen) {
                     si_tcp_logerr("tx_size(%u) != hlen(%u), io %d/%d, map_ix=%u", tx_size, hlen, i, sz_iov-1, map_ix);
@@ -1604,12 +1604,12 @@ done:
      */
     if (is_send_zerocopy) {
         if (total_tx > 0) {
-            // if (m_last_zcdesc->tx.zc.id != (uint32_t)atomic_read(&m_zckey)) {
-            if (m_last_zcdesc->tx.zc.id != m_zckey.load()) {
+            if (m_last_zcdesc->tx.zc.id != (uint32_t)atomic_read(&m_zckey)) {
+            // if (m_last_zcdesc->tx.zc.id != m_zckey.load()) {
                 si_tcp_logerr("Invalid tx zcopy operation");
             } else {
-                m_zckey++;
-                // atomic_fetch_and_inc(&m_zckey);
+                // m_zckey++;
+                atomic_fetch_and_inc(&m_zckey);
             }
         } else {
             // si_tcp_loginfo("revert: data_exceeds_datal %u->%u datal %ld->%u, map_ix=%u", data_exceeds_datal, prev_data_exceeds_datal, datal, prev_datal, map_ix);
@@ -3993,8 +3993,8 @@ err_t sockinfo_tcp::syn_received_timewait_cb(void *arg, struct tcp_pcb *newpcb)
     new_sock->socket_stats_init();
 
     /* Reset zerocopy state */
-    // atomic_set(&new_sock->m_zckey, 0);
-    new_sock->m_zckey.store(0);
+    atomic_set(&new_sock->m_zckey, 0);
+    // new_sock->m_zckey.store(0);
     new_sock->m_last_zcdesc = NULL;
     new_sock->m_b_zc = false;
 
@@ -6071,8 +6071,8 @@ void sockinfo_tcp::tcp_tx_pbuf_free(void *p_conn, struct pbuf *p_buff)
 mem_buf_desc_t *sockinfo_tcp::tcp_tx_zc_alloc(mem_buf_desc_t *p_desc)
 {
     p_desc->m_flags |= mem_buf_desc_t::ZCOPY;
-    // p_desc->tx.zc.id = atomic_read(&m_zckey);
-    p_desc->tx.zc.id = m_zckey.load();
+    p_desc->tx.zc.id = atomic_read(&m_zckey);
+    // p_desc->tx.zc.id = m_zckey.load();
     p_desc->tx.zc.count = 1;
     p_desc->tx.zc.len = p_desc->lwip_pbuf.pbuf.len;
     p_desc->tx.zc.ctx = (void *)this;
@@ -6167,7 +6167,11 @@ void sockinfo_tcp::tcp_tx_zc_handle(mem_buf_desc_t *p_desc)
     count = p_desc->tx.zc.count;
     lo = p_desc->tx.zc.id;
     if (lo == 0) {
-        si_tcp_logerr("lo = 0!!!!");
+        if (first_zc_send) {
+            first_zc_send = false;
+        } else {
+            si_tcp_logerr("lo = 0!!!!");
+        }
     }
     hi = lo + count - 1;
     memset(&p_desc->ee, 0, sizeof(p_desc->ee));
