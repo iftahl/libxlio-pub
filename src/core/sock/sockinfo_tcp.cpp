@@ -1370,6 +1370,9 @@ decreased_tx_size:
 
             if (check_pdu) {
                 if ((long unsigned int)p_iov[i].iov_base > 0x200000000000) {
+                    if (datal) {
+                        si_tcp_logerr("expected datal = 0! io %d/%d (len=%u), datal=%ld ,map_ix=%u", i, sz_iov-1, p_iov[i].iov_len, datal, map_ix);
+                    }
                     uint8_t *arr;
                     uint32_t *arr32;
                     if (pos == 0) {
@@ -1554,7 +1557,7 @@ decreased_tx_size:
                 if (tx_size != hlen) {
                     si_tcp_logerr("tx_size(%u) != hlen(%u), io %d/%d, map_ix=%u", tx_size, hlen, i, sz_iov-1, map_ix);
                 }
-                si_tcp_loginfo("header sent %u==%u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d, map_ix=%u", hlen, p_iov[i].iov_len, datal_sent_so_far, datal, i, sz_iov-1, map_ix);
+                si_tcp_loginfo("header sent %u==%u of data (datal_sent_so_far=%u), ramaining %ld: io %d/%d, tot_header_sent=%u, map_ix=%u", hlen, p_iov[i].iov_len, datal_sent_so_far, datal, i, sz_iov-1, tot_header_sent, map_ix);
             }
         }
     }
@@ -1638,8 +1641,8 @@ done:
     // if ((int)total_iov_len != total_tx) {
     //     si_tcp_logerr("didnt send all data: %d/%zu", total_tx, total_iov_len);
     // }
-    // si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, (uint32_t)atomic_read(&m_zckey));
-    si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, m_zckey.load());
+    si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, (uint32_t)atomic_read(&m_zckey));
+    // si_tcp_loginfo("IFTAH - ret=%d map_ix=%u (new=%u)", total_tx, map_ix, m_zckey.load());
     return total_tx;
 
 err:
