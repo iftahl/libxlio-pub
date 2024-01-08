@@ -503,6 +503,14 @@ void cq_mgr_mlx5::log_cqe_error(struct xlio_mlx5_cqe *cqe)
     }
 }
 
+void cq_mgr_mlx5::l_e(unsigned index)
+{
+    sq_wqe_prop *p = &m_qp->m_sq_wqe_idx_to_prop[index];
+    mem_buf_desc_t *mem_buf = p->buf;
+    cq_logwarn("attr=%d, mkey=%u, act_mkey_used=%u, existed=%d, ptr=%p",
+    mem_buf->lwip_pbuf.pbuf.desc.attr, mem_buf->lwip_pbuf.pbuf.desc.mkey, mem_buf->act_mkey_used, mem_buf->existed, mem_buf->addr);
+}
+
 void cq_mgr_mlx5::handle_sq_wqe_prop(unsigned index)
 {
     sq_wqe_prop *p = &m_qp->m_sq_wqe_idx_to_prop[index];
@@ -567,6 +575,7 @@ int cq_mgr_mlx5::poll_and_process_element_tx(uint64_t *p_cq_poll_sn)
         if (unlikely(cqe->op_own & 0x80) && is_error_opcode(cqe->op_own >> 4)) {
             m_p_cq_stat->n_rx_cqe_error++;
             log_cqe_error(cqe);
+            l_e(index);
         }
 
         handle_sq_wqe_prop(index);

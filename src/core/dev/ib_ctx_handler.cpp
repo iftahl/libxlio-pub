@@ -44,6 +44,7 @@
 #include "dev/time_converter_rtc.h"
 #include "util/valgrind.h"
 #include "event/event_handler_manager.h"
+#include "sock/sock-redirect.h"
 
 #define MODULE_NAME "ibch"
 
@@ -93,6 +94,7 @@ ib_ctx_handler::ib_ctx_handler(struct ib_ctx_handler_desc *desc)
         }
         // Create pd for this device
         m_p_ibv_pd = ibv_alloc_pd(m_p_ibv_context);
+        ibch_loginfo("IFTAH - allocated pd=%p", m_p_ibv_pd);
         if (m_p_ibv_pd == NULL) {
             ibch_logpanic("ibv device %p pd allocation failure (ibv context %p) (errno=%d %m)",
                           m_p_ibv_device, m_p_ibv_context, errno);
@@ -445,7 +447,16 @@ uint32_t ib_ctx_handler::mem_reg(void *addr, size_t length, uint64_t access)
     struct ibv_mr *mr = NULL;
     uint32_t lkey = LKEY_ERROR;
 
+    // if (0x2000da000000 == ((long unsigned int)addr & 0xfffffffffe000000)) {
+    //     ibch_loginfo("IFTAH - mem_reg addr 0x2000da000000 (addr=%p)", addr);
+    // }
+
     mr = ibv_reg_mr(m_p_ibv_pd, addr, length, access);
+
+    // double mem reg - use the first.
+    // struct ibv_mr *mr2 = ibv_reg_mr(m_p_ibv_pd, addr, length, access);
+    // orig_os_api.ibv_dereg_mr(mr2);
+
     VALGRIND_MAKE_MEM_DEFINED(mr, sizeof(ibv_mr));
     if (NULL == mr) {
         print_warning_rlimit_memlock(length, errno);
@@ -460,22 +471,27 @@ uint32_t ib_ctx_handler::mem_reg(void *addr, size_t length, uint64_t access)
     return lkey;
 }
 
-void ib_ctx_handler::mem_dereg(uint32_t lkey)
+void ib_ctx_handler::mem_dereg(uint32_t lkey, void *addr /* = NULL */)
 {
     auto iter = m_mr_map_lkey.find(lkey);
     if (iter != m_mr_map_lkey.end()) {
         struct ibv_mr *mr = iter->second;
         ibch_logdbg("dev:%s (%p) addr=%p length=%lu pd=%p", get_ibname(), m_p_ibv_device, mr->addr,
                     mr->length, m_p_ibv_pd);
-        IF_VERBS_FAILURE_EX(ibv_dereg_mr(mr), EIO)
+        IF_VERBS_FAILURE_EX(orig_os_api.ibv_dereg_mr(mr), EIO)
         {
-            ibch_logdbg("failed de-registering a memory region "
+            ibch_logerr("failed de-registering a memory region "
                         "(errno=%d %m)",
                         errno);
         }
         ENDIF_VERBS_FAILURE;
         VALGRIND_MAKE_MEM_UNDEFINED(mr, sizeof(ibv_mr));
         m_mr_map_lkey.erase(iter);
+        if (addr && (m_user_mem_lkey_map.find(addr) != m_user_mem_lkey_map.end())) {
+            m_user_mem_lkey_map.erase(addr);
+        }
+    } else {
+        ibch_logerr("failed 2 de-registering a memory region (errno=%d %m)", errno);
     }
 }
 
@@ -489,7 +505,7 @@ struct ibv_mr *ib_ctx_handler::get_mem_reg(uint32_t lkey)
     return NULL;
 }
 
-uint32_t ib_ctx_handler::user_mem_reg(void *addr, size_t length, uint64_t access)
+uint32_t ib_ctx_handler::user_mem_reg(void *addr, size_t length, uint64_t access, int *ib_ctx_exist)
 {
     std::lock_guard<decltype(m_lock_umr)> lock(m_lock_umr);
     uint32_t lkey;
@@ -497,11 +513,19 @@ uint32_t ib_ctx_handler::user_mem_reg(void *addr, size_t length, uint64_t access
     auto iter = m_user_mem_lkey_map.find(addr);
     if (iter != m_user_mem_lkey_map.end()) {
         lkey = iter->second;
+        if (ib_ctx_exist) {
+            *ib_ctx_exist = 100;
+        }
     } else {
         lkey = mem_reg(addr, length, access);
         if (lkey == LKEY_ERROR) {
             ibch_logerr("Can't register user memory addr %p len %lx", addr, length);
         } else {
+            if (0x2000da000000UL == (unsigned long)addr) {
+                ibch_loginfo("IFTAH - mem_reg addr 0x2000da000000, len=0x%lx", length);
+                // int *bt = nullptr;
+                // *bt = 0;
+            }
             m_user_mem_lkey_map[addr] = lkey;
         }
     }

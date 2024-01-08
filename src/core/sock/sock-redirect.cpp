@@ -61,6 +61,10 @@
 
 #include "fd_collection.h"
 #include "util/instrumentation.h"
+#include <infiniband/verbs.h>
+#include <infiniband/ib_user_ioctl_verbs.h>
+
+#undef ibv_reg_mr
 
 using namespace std;
 
@@ -183,6 +187,10 @@ void get_orig_funcs()
     GET_ORIG_FUNC(daemon);
     GET_ORIG_FUNC(sigaction);
     GET_ORIG_FUNC(signal);
+    GET_ORIG_FUNC(ibv_reg_mr);
+    GET_ORIG_FUNC(ibv_dereg_mr);
+    GET_ORIG_FUNC(ibv_reg_mr_iova2);
+    
 #if defined(DEFINED_NGINX)
     GET_ORIG_FUNC(setuid);
     GET_ORIG_FUNC(waitpid);
@@ -279,6 +287,39 @@ bool handle_close(int fd, bool cleanup, bool passthrough)
 //-----------------------------------------------------------------------------
 //  replacement functions
 //-----------------------------------------------------------------------------
+
+extern "C" EXPORT_SYMBOL struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *addr, size_t length,
+                                uint64_t iova, unsigned int access)
+{
+    if (!orig_os_api.ibv_reg_mr_iova2) {
+        get_orig_funcs();
+    }
+
+    struct ibv_mr *mr = orig_os_api.ibv_reg_mr_iova2(pd, addr, length, iova, access);
+    vlog_printf(VLOG_INFO, "IFTAH - ibv_reg_mr_iova2: pd=%p, addr=%p, len=%zu, access=0x%x, mr=%p\n", pd, addr, length, access);
+    return mr;    
+}
+
+extern "C" EXPORT_SYMBOL struct ibv_mr *ibv_reg_mr(struct ibv_pd *__pd, void *__addr, size_t __length, int __access/*, int __is_access_const*/)
+{
+    if (!orig_os_api.ibv_reg_mr) {
+        get_orig_funcs();
+    }
+
+    struct ibv_mr *mr = orig_os_api.ibv_reg_mr(__pd, __addr, __length, __access);
+    vlog_printf(VLOG_INFO, "IFTAH - ibv_reg_mr: pd=%p, addr=%p, len=%zu, access=0x%x, mr=%p\n", __pd, __addr, __length, __access);
+    return mr;
+}
+
+extern "C" EXPORT_SYMBOL int ibv_dereg_mr(struct ibv_mr *__mr)
+{
+    if (!orig_os_api.ibv_dereg_mr) {
+        get_orig_funcs();
+    }
+
+    vlog_printf(VLOG_INFO, "IFTAH - ibv_dereg_mr: pd=%p, addr=%p, len=%zu, mr=%p\n", __mr->pd, __mr->addr, __mr->length, __mr);
+    return orig_os_api.ibv_dereg_mr(__mr);
+}
 
 /* Create a new socket of type TYPE in domain DOMAIN, using
    protocol PROTOCOL.  If PROTOCOL is zero, one is chosen automatically.

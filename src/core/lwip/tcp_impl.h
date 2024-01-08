@@ -307,6 +307,12 @@ struct tcp_seg {
     u32_t l2_l3_tcphdr_zc[25] __attribute__((aligned(4)));
 
     int flow;
+    uint32_t attr_len;
+    uint32_t attr_mss;
+    int sge_attr[4];
+    uint32_t sge_mkey[4];
+    int sge_orig_attr[4];
+    uint32_t sge_orig_mkey[4];    
 };
 
 #define LWIP_IS_DUMMY_SEGMENT(seg) (seg->flags & TF_SEG_OPTS_DUMMY_MSG)

@@ -44,7 +44,8 @@ uint32_t zcopy_hugepage::get_lkey(mem_buf_desc_t *desc, ib_ctx_handler *ib_ctx, 
     if (unlikely(!m_is_pinned)) {
         lock();
         if (!m_is_pinned) {
-            m_lkey = ib_ctx->user_mem_reg(m_addr, m_size, XLIO_IBV_ACCESS_LOCAL_WRITE);
+            vlog_printf(VLOG_INFO, "IFTAH - zcopy_hugepage::get_lkey: addr=%p size=%zu\n", m_addr, m_size);
+            m_lkey = ib_ctx->user_mem_reg(m_addr, m_size, XLIO_IBV_ACCESS_LOCAL_WRITE, nullptr);
             m_is_pinned = true;
         }
         unlock();

@@ -55,9 +55,16 @@
 #define ppoll ppoll_unused
 #endif
 #endif /* __clang__ */
+// #undef ibv_reg_mr
+// #define ibv_reg_mr ibv_reg_mr_unused
+// #define ibv_dereg_mr ibv_dereg_mr_unused
 #include <unistd.h>
 #include <sys/socket.h>
 #include <poll.h>
+#include <rdma/rdma_cma.h>
+#include <infiniband/verbs.h>
+// #undef ibv_reg_mr
+// #undef ibv_dereg_mr
 #ifdef __clang__
 #ifdef HAVE___READ_CHK
 #undef read

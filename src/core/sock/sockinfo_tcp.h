@@ -424,7 +424,18 @@ private:
     uint16_t m_external_vlan_tag = 0U;
     uint32_t data_exceeds_datal = 0;
     long int datal = 0;
-
+    long int m_comp_counter = 0;
+    uint32_t m_comp_seqno[200];
+    void *m_comp_ptr[200];
+    uint64_t m_comp_pdu[200];
+    uint32_t m_attr_len[200];
+    uint32_t m_attr_mss[200];
+    int m_buf_attr[200][4];
+    uint32_t m_mkey[200][4];
+    int m_buf_orig_attr[200][4];
+    uint32_t m_orig_mkey[200][4];
+    bool m_print_enable = false;
+    
     inline void lwip_pbuf_init_custom(mem_buf_desc_t *p_desc);
 
     void tcp_timer();

@@ -276,6 +276,7 @@ inline void sockinfo_tcp::reuse_buffer(mem_buf_desc_t *buff)
         sockinfo::reuse_buffer(buff);
     }
 }
+#include <string>
 
 static inline bool use_socket_ring_locks()
 {
@@ -295,6 +296,14 @@ sockinfo_tcp::sockinfo_tcp(int fd, int domain)
     , m_required_send_block(1U)
 {
     si_tcp_logfuncall("");
+
+    std::ifstream inFile;
+    std::string line;
+    inFile.open("/etc/nvda_snap/enable_print.conf");
+    if (getline(inFile, line)) {
+        m_print_enable = (line[0] == '1');
+    }
+    inFile.close();
 
     m_ops = m_ops_tcp = new sockinfo_tcp_ops(this);
     assert(m_ops != NULL); /* XXX */
@@ -541,7 +550,37 @@ bool sockinfo_tcp::prepare_to_close(bool process_shutdown /* = false */)
 
     lock_tcp_con();
 
+    ring_simple *ring = dynamic_cast<ring_simple *>(get_tx_ring());
+    if (ring) {
+        // si_tcp_loginfo("IFTAH - found tx ring, dereg all mkeys");
+        // ring->mem_dereg_all();
+    } else {
+        si_tcp_logerr("IFTAH - couldnt find tx ring");
+    }
+
     si_tcp_logdbg("");
+    
+    for(int i=0; i<200; i++) {
+        // si_tcp_loginfo("sport=%u, counter=%ld: seqno=%u, ptr=%p, data=0x%x, at.len=%u, mss=%u",
+        // ntohs(m_bound.get_in_port()), m_comp_counter, m_comp_seqno[m_comp_counter], m_comp_ptr[m_comp_counter], m_comp_pdu[m_comp_counter]
+        // , m_attr_len[m_comp_counter], m_attr_mss[m_comp_counter]);
+        si_tcp_loginfo("sport=%u, seqno=%u, data=0x%x, at.len=%u, mss=%u\nptr=%p, 0: %d (0x%x) %u (0x%x), 1: %d (0x%x) %u (0x%x), 2: %d (0x%x) %u (0x%x), 3: %d (0x%x) %u (0x%x)",
+        ntohs(m_bound.get_in_port()), m_comp_seqno[m_comp_counter], ntohl(m_comp_pdu[m_comp_counter])
+        , m_attr_len[m_comp_counter], m_attr_mss[m_comp_counter],
+        m_comp_ptr[m_comp_counter],
+        m_buf_attr[m_comp_counter][0], m_buf_orig_attr[m_comp_counter][0], m_mkey[m_comp_counter][0],m_orig_mkey[m_comp_counter][0],
+        m_buf_attr[m_comp_counter][1], m_buf_orig_attr[m_comp_counter][1], m_mkey[m_comp_counter][1],m_orig_mkey[m_comp_counter][1],
+        m_buf_attr[m_comp_counter][2], m_buf_orig_attr[m_comp_counter][2], m_mkey[m_comp_counter][2],m_orig_mkey[m_comp_counter][2],
+        m_buf_attr[m_comp_counter][3], m_buf_orig_attr[m_comp_counter][3], m_mkey[m_comp_counter][3],m_orig_mkey[m_comp_counter][3]
+        );
+
+
+        m_comp_counter++;
+        if (m_comp_counter == 200) {
+            m_comp_counter = 0;
+        }
+    }
+
 
     bool is_listen_socket = is_server() || get_tcp_state(&m_pcb) == LISTEN;
 
@@ -1031,6 +1070,22 @@ retry_is_ready:
     // si_tcp_loginfo("map_ix=%u - total_iov_len=%zu", map_ix, total_iov_len);
     uint32_t tot_header_sent = 0;
     uint32_t tot_datal_sent = 0;
+
+    // for (int i=0; i<(int)sz_iov; i++) {
+    //     if ((long unsigned int)p_iov[i].iov_base > 0x200000000000) {
+    //         if ((__flags & MSG_ZEROCOPY) && (0 == tx_arg.priv.attr)) {
+    //             si_tcp_logerr("ZC_flag=%d, io #%d: ptr=%p, attr=%d", !!(__flags & MSG_ZEROCOPY), i, p_iov[i].iov_base, tx_arg.priv.attr);
+    //         }
+    //     }
+    // }
+
+    if (m_print_enable) {
+        for (int i=0; i<(int)sz_iov; i++) {
+            if ((long unsigned int)p_iov[i].iov_base > 0x200000000000) {
+                si_tcp_loginfo("ZC_flag=%d, io #%d: ptr=%p, attr=%d", !!(__flags & MSG_ZEROCOPY), i, p_iov[i].iov_base, tx_arg.priv.attr);
+            }
+        }
+    }
 
     if (datal) {
         if (p_iov[0].iov_len <= (uint32_t)datal) {
@@ -1716,6 +1771,7 @@ zc_fill_iov:
     lwip_iovec[0].iovec.iov_base = p->payload;
     lwip_iovec[0].iovec.iov_len = p->len;
     lwip_iovec[0].p_desc = (mem_buf_desc_t *)p;
+    lwip_iovec[0].p_desc->m_tcp_seg = seg;
     attr.length += p->len;
     p = p->next;
     /*
@@ -1729,17 +1785,24 @@ zc_fill_iov:
             ((uintptr_t)((uint64_t)lwip_iovec[count].iovec.iov_base &
                          p_si_tcp->m_user_huge_page_mask) ==
              (uintptr_t)((uint64_t)p->payload & p_si_tcp->m_user_huge_page_mask))) {
+            vlog_printf(VLOG_ERROR, "IFTAH - zc_fill_iov shouldn't get here...\n");
             lwip_iovec[count].iovec.iov_len += p->len;
         } else {
             count++;
             lwip_iovec[count].iovec.iov_base = p->payload;
             lwip_iovec[count].iovec.iov_len = p->len;
             lwip_iovec[count].p_desc = (mem_buf_desc_t *)p;
+            lwip_iovec[count].p_desc->m_tcp_seg = seg;
         }
         attr.length += p->len;
         p = p->next;
     }
     count++;
+
+    if (seg) {
+        seg->attr_len = attr.length;
+        seg->attr_mss = attr.mss;
+    }
 
 send_iov:
     /* Sanity check */
@@ -1755,6 +1818,9 @@ send_iov:
     //     (void*)(seg->p->payload), seg_zc_flag, seg->flow, orig_p->tot_len, seg->len, (void*)(((struct iovec *)lwip_iovec)->iov_base));
     // }
 
+
+
+    
     ssize_t ret = 0;
     if (likely((p_dst->is_valid()))) {
         ret = p_dst->fast_send((struct iovec *)lwip_iovec, count, attr);
@@ -5328,6 +5394,7 @@ int sockinfo_tcp::getsockopt_offload(int __level, int __optname, void *__optval,
                             struct xlio_pd_attr *pd_attr = (struct xlio_pd_attr *)__optval;
                             pd_attr->flags = 0;
                             pd_attr->ib_pd = (void *)p_ib_ctx_h->get_ibv_pd();
+                            si_tcp_loginfo("IFTAH - spdk will use allocated pd=%p", pd_attr->ib_pd);
                             ret = 0;
                         }
                     }
@@ -6098,6 +6165,54 @@ void sockinfo_tcp::tcp_tx_zc_callback(mem_buf_desc_t *p_desc)
     if (!p_desc) {
         return;
     }
+
+    if (p_desc->tx.zc.ctx) {
+        if (((long unsigned int)(p_desc->lwip_pbuf.pbuf.payload)) > 0x200000000000) {
+            uint64_t *ptr = reinterpret_cast<uint64_t*>(p_desc->lwip_pbuf.pbuf.payload);
+
+
+            sockinfo_tcp *t_sock = (sockinfo_tcp *)p_desc->tx.zc.ctx;
+            t_sock->m_comp_seqno[t_sock->m_comp_counter] = p_desc->m_tcp_seg->seqno;
+            t_sock->m_comp_ptr[t_sock->m_comp_counter] = p_desc->lwip_pbuf.pbuf.payload;
+            t_sock->m_comp_pdu[t_sock->m_comp_counter] = ptr[0];
+            t_sock->m_attr_len[t_sock->m_comp_counter] = p_desc->m_tcp_seg->attr_len;
+            t_sock->m_attr_mss[t_sock->m_comp_counter] = p_desc->m_tcp_seg->attr_mss;
+
+            t_sock->m_buf_attr[t_sock->m_comp_counter][0] = p_desc->m_tcp_seg->sge_attr[0];
+            t_sock->m_buf_attr[t_sock->m_comp_counter][1] = p_desc->m_tcp_seg->sge_attr[1];
+            t_sock->m_buf_attr[t_sock->m_comp_counter][2] = p_desc->m_tcp_seg->sge_attr[2];
+            t_sock->m_buf_attr[t_sock->m_comp_counter][3] = p_desc->m_tcp_seg->sge_attr[3];
+
+            t_sock->m_mkey[t_sock->m_comp_counter][0] = p_desc->m_tcp_seg->sge_mkey[0];
+            t_sock->m_mkey[t_sock->m_comp_counter][1] = p_desc->m_tcp_seg->sge_mkey[1];
+            t_sock->m_mkey[t_sock->m_comp_counter][2] = p_desc->m_tcp_seg->sge_mkey[2];
+            t_sock->m_mkey[t_sock->m_comp_counter][3] = p_desc->m_tcp_seg->sge_mkey[3];
+
+            t_sock->m_buf_orig_attr[t_sock->m_comp_counter][0] = p_desc->m_tcp_seg->sge_orig_attr[0];
+            t_sock->m_buf_orig_attr[t_sock->m_comp_counter][1] = p_desc->m_tcp_seg->sge_orig_attr[1];
+            t_sock->m_buf_orig_attr[t_sock->m_comp_counter][2] = p_desc->m_tcp_seg->sge_orig_attr[2];
+            t_sock->m_buf_orig_attr[t_sock->m_comp_counter][3] = p_desc->m_tcp_seg->sge_orig_attr[3];
+            
+            t_sock->m_orig_mkey[t_sock->m_comp_counter][0] = p_desc->m_tcp_seg->sge_orig_mkey[0];
+            t_sock->m_orig_mkey[t_sock->m_comp_counter][1] = p_desc->m_tcp_seg->sge_orig_mkey[1];
+            t_sock->m_orig_mkey[t_sock->m_comp_counter][2] = p_desc->m_tcp_seg->sge_orig_mkey[2];
+            t_sock->m_orig_mkey[t_sock->m_comp_counter][3] = p_desc->m_tcp_seg->sge_orig_mkey[3];
+
+            t_sock->m_comp_counter++;
+            if (t_sock->m_comp_counter >= 200)
+                t_sock->m_comp_counter = 0;
+            
+            if (ptr[0] == 0 && ptr[1] == 0 && ptr[2] == 0) {
+                vlog_printf(VLOG_ERROR, "IFTAH - tcp_tx_zc_callback - all first 24 bytes are zeros...\n");
+            } else {
+                static long int counter = 0;
+                if (counter++ % 50000 == 0) {
+                    vlog_printf(VLOG_INFO, "IFTAH - tcp_tx_zc_callback - data is not 0\n");
+                }
+            }
+        }
+    }
+
 
     if (!p_desc->tx.zc.ctx || !p_desc->tx.zc.count) {
         if (p_desc->tx.zc.ctx && p_desc->tx.zc.count) {

@@ -89,6 +89,7 @@ protected:
     void lro_update_hdr(struct xlio_mlx5_cqe *cqe, mem_buf_desc_t *p_rx_wc_buf_desc);
 
 private:
+    void l_e(unsigned index);
     void handle_sq_wqe_prop(unsigned index);
     int drain_and_proccess_socketxtreme(uintptr_t *p_recycle_buffers_last_wr_id);
     int drain_and_proccess_helper(mem_buf_desc_t *buff, buff_status_e status,

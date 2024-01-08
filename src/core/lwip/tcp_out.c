@@ -527,7 +527,7 @@ err_t tcp_write(struct tcp_pcb *pcb, const void *arg, u32_t len, u16_t apiflags,
          * (len==0). The new pbuf is kept in concat_p and pbuf_cat'ed at
          * the end.
          */
-        if (!is_file && (pos < len) && (space > 0) && (pcb->last_unsent->len > 0) &&
+        if (0 && !is_file && (pos < len) && (space > 0) && (pcb->last_unsent->len > 0) &&
             (tot_p < (int)pcb->tso.max_send_sge)) {
 
             u32_t seglen = space < len - pos ? space : len - pos;
@@ -703,6 +703,15 @@ err_t tcp_write(struct tcp_pcb *pcb, const void *arg, u32_t len, u16_t apiflags,
     }
     pcb->last_unsent = seg;
 
+    struct pbuf *cur_p = seg->p;
+    for(int i = 0; i < 4; i++) {
+        seg->sge_orig_attr[i] = (cur_p->desc.attr << 4) | desc->attr;
+        seg->sge_orig_mkey[i] = (cur_p->desc.mkey << 16) | desc->mkey;
+        if (!(cur_p->next))
+            break;
+        cur_p = cur_p->next;
+    }
+
     /*
      * Finally update the pcb state.
      */
@@ -777,7 +786,7 @@ err_t tcp_enqueue_flags(struct tcp_pcb *pcb, u8_t flags)
         return ERR_MEM;
     }
 
-    printf("IFTAH - tcp_enqueue_flags...\n");
+    // printf("IFTAH - tcp_enqueue_flags...\n");
 
     if (flags & TCP_SYN) {
         optflags = TF_SEG_OPTS_MSS;

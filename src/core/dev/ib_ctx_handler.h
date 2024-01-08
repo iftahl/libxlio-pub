@@ -88,9 +88,9 @@ public:
     }
     xlio_ibv_device_attr_ex *get_ibv_device_attr_ex() { return m_p_ibv_device_attr; }
     uint32_t mem_reg(void *addr, size_t length, uint64_t access);
-    void mem_dereg(uint32_t lkey);
+    void mem_dereg(uint32_t lkey, void *addr = NULL);
     struct ibv_mr *get_mem_reg(uint32_t lkey);
-    uint32_t user_mem_reg(void *addr, size_t length, uint64_t access);
+    uint32_t user_mem_reg(void *addr, size_t length, uint64_t access, int *ib_ctx_exist);
     bool is_removed() { return m_removed; }
     void set_ctx_time_converter_status(ts_conversion_mode_t conversion_mode);
     ts_conversion_mode_t get_ctx_time_converter_status();

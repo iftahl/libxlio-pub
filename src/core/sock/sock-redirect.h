@@ -94,6 +94,10 @@ struct mmsghdr;
  */
 
 struct os_api {
+    struct ibv_mr *(*ibv_reg_mr_iova2)(struct ibv_pd *pd, void *addr, size_t length, uint64_t iova, unsigned int access);
+    struct ibv_mr *(*ibv_reg_mr)(struct ibv_pd *pd, void *addr, size_t length, int access);
+    int (*ibv_dereg_mr)(struct ibv_mr *mr);
+
     int (*creat)(const char *__pathname, mode_t __mode);
     int (*open)(__const char *__file, int __oflag, ...);
     int (*dup)(int fildes);

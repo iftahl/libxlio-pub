@@ -34,6 +34,7 @@
 #include "mapping.h"
 #include "mem_desc.h"
 #include <netinet/tcp.h>
+#include "lwip/tcp_impl.h"
 
 #define MODULE_NAME "dst_tcp"
 
@@ -136,6 +137,10 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
          */
         total_packet_len = attr.length + m_header->m_total_hdr_len;
 
+        if (total_packet_len > 65535) {
+            dst_tcp_logerr("total_packet_len=%zu", total_packet_len);
+        }
+
         /* copy just L2/L3 headers to p_pkt */
         m_header->copy_l2_ip_hdr(p_pkt);
 
@@ -226,10 +231,16 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
         static uint8_t testblock[24] = {};
         memset(testblock, 0, 24);
         
+        uint32_t total_iov_len = 0;
         // static uint32_t last_lkey = 0;
         for (int i = 0; i < sz_iov; ++i) {
             m_sge[i].addr = (uintptr_t)p_tcp_iov[i].iovec.iov_base;
             m_sge[i].length = p_tcp_iov[i].iovec.iov_len;
+            total_iov_len += m_sge[i].length;
+
+            p_tcp_iov[i].p_desc->act_mkey_used = 0;
+            p_tcp_iov[i].p_desc->existed = -2;
+
             if (check_data) {
                 // dst_tcp_loginfo("IFTAH - attr.length=%zu, iov #%d: length=%zu, p=%p", attr.length, i, m_sge[i].length, (void*)(m_sge[i].addr));
                 if (/*(i == 0) &&  (72 == m_sge[i].length) && */ ((long unsigned int)(m_sge[i].addr) > 0x200000000000)) {
@@ -246,6 +257,7 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
                 }
             }
             if (is_zerocopy) {
+                int existed = -1;
                 if (PBUF_DESC_MKEY == p_tcp_iov[i].p_desc->lwip_pbuf.pbuf.desc.attr) {
                     /* PBUF_DESC_MKEY - value is provided by user */
                     m_sge[i].lkey = p_tcp_iov[i].p_desc->lwip_pbuf.pbuf.desc.mkey;
@@ -266,8 +278,22 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
                      */
                     masked_addr = (void *)((uint64_t)m_sge[i].addr & m_user_huge_page_mask);
                     m_sge[i].lkey =
-                        m_p_ring->get_tx_user_lkey(masked_addr, m_n_sysvar_user_huge_page_size,
+                        m_p_ring->get_tx_user_lkey(masked_addr, m_n_sysvar_user_huge_page_size, &existed,
                                                    p_tcp_iov[i].p_desc->lwip_pbuf.pbuf.desc.map);
+                    p_tcp_iov[i].p_desc->act_mkey_used = m_sge[i].lkey;
+                    p_tcp_iov[i].p_desc->existed = existed;
+                    p_tcp_iov[i].p_desc->addr = masked_addr;
+
+                    if ((long unsigned int)(m_sge[i].addr) > 0x200000000000) {
+                        if (((unsigned long)(m_sge[i].addr) + m_sge[i].length) >= ((unsigned long)(masked_addr) + m_n_sysvar_user_huge_page_size)) {
+                            dst_tcp_logerr("IFTAH - crossed page!!!!");
+                        }
+                    }
+                    
+                }
+                if (i < 4 && p_tcp_iov[i].p_desc->m_tcp_seg) {
+                    p_tcp_iov[i].p_desc->m_tcp_seg->sge_attr[i] = p_tcp_iov[i].p_desc->lwip_pbuf.pbuf.desc.attr;
+                    p_tcp_iov[i].p_desc->m_tcp_seg->sge_mkey[i] = m_sge[i].lkey;
                 }
             } else {
                 m_sge[i].lkey = (i == 0 ? m_p_ring->get_tx_lkey(m_id) : m_sge[0].lkey);
@@ -286,6 +312,10 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
             //         }
             //     }
             // }
+        }
+
+        if (total_iov_len > 65535) {
+            dst_tcp_logerr("total_iov_len=%u", total_iov_len);
         }
 
         ret = send_lwip_buffer(m_id, m_p_send_wqe, attr.flags, attr.tis);

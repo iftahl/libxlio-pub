@@ -983,6 +983,7 @@ static u32_t tcp_shrink_zc_segment(struct tcp_pcb *pcb, struct tcp_seg *seg, u32
         seg->p->len -= len;
         seg->p->tot_len -= len;
         seg->seqno = ackno;
+        seg->flow = 5;
     }
     seg->tcphdr->seqno = htonl(seg->seqno);
 

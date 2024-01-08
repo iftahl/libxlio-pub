@@ -271,6 +271,7 @@ uint32_t xlio_registrator::register_memory_single(void *data, size_t size,
     errno = 0; // ibv_reg_mr() set errno=12 despite successful returning
     __log_info_dbg("Registered memory on dev %s addr=%p size=%zu", p_ib_ctx_h->get_ibname(), data,
                    size);
+    __log_info_info("Registered memory addr=%p size=0x%lx, access=%lu", data, size, access);
 
     return lkey;
 }

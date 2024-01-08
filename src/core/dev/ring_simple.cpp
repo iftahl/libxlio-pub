@@ -278,6 +278,8 @@ void ring_simple::create_resources()
                 &xlio_get_tso_caps(m_p_ib_ctx->get_ibv_device_attr_ex());
             if (ibv_is_qpt_supported(caps->supported_qpts, IBV_QPT_RAW_PACKET)) {
                 m_tso.max_payload_sz = caps->max_tso;
+                // m_tso.max_payload_sz = 32767;
+                ring_loginfo("IFTAH - m_tso.max_payload_sz=%u", m_tso.max_payload_sz);
                 /* ETH(14) + IP(20) + TCP(20) + TCP OPTIONS(40) */
                 m_tso.max_header_sz = 94;
             }
@@ -1161,8 +1163,25 @@ int ring_simple::modify_ratelimit(struct xlio_rate_limit_t &rate_limit)
     return 0;
 }
 
-uint32_t ring_simple::get_tx_user_lkey(void *addr, size_t length, void *p_mapping /*=NULL*/)
+void ring_simple::mem_dereg_all()
 {
+    uint32_t lkey;
+    m_lock_ring_tx.lock();
+    ibv_pd *pd = m_p_ib_ctx->get_ibv_pd();
+    ring_loginfo("IFTAH - dereg with allocated pd=%p", pd);
+    for (auto &iter : m_user_lkey_map) {
+        if (m_user_lkey_map.size() == 0)
+            break;
+        lkey = iter.second;
+        m_p_ib_ctx->mem_dereg(lkey, iter.first);
+        m_user_lkey_map.erase(iter.first);
+    }
+    m_lock_ring_tx.unlock();
+}
+
+uint32_t ring_simple::get_tx_user_lkey(void *addr, size_t length, int *existed, void *p_mapping /*=NULL*/)
+{
+    std::lock_guard<decltype(m_lock_ring_tx)> lock(m_lock_ring_tx);
     uint32_t lkey;
 
     /*
@@ -1180,8 +1199,12 @@ uint32_t ring_simple::get_tx_user_lkey(void *addr, size_t length, void *p_mappin
         auto iter = m_user_lkey_map.find(addr);
         if (iter != m_user_lkey_map.end()) {
             lkey = iter->second;
+            *existed = 1;
+            // m_p_ib_ctx->mem_dereg(lkey);
         } else {
-            lkey = m_p_ib_ctx->user_mem_reg(addr, length, XLIO_IBV_ACCESS_LOCAL_WRITE);
+            int ib_ctx_exist = 0;
+            lkey = m_p_ib_ctx->user_mem_reg(addr, length, XLIO_IBV_ACCESS_LOCAL_WRITE, &ib_ctx_exist);
+            *existed = 0 | ib_ctx_exist;
             if (lkey == LKEY_ERROR) {
                 ring_logerr("Can't register user memory addr %p len %lx", addr, length);
             } else {

@@ -189,6 +189,10 @@ public:
     // Tx: qp_mgr owns the mem_buf_desc and the associated data buffer
     // Rx: cq_mgr owns the mem_buf_desc and the associated data buffer
     ring_slave *p_desc_owner;
+    struct tcp_seg *m_tcp_seg = nullptr;
+    uint32_t act_mkey_used = 0;
+    int existed = -2;
+    void *addr = nullptr;
 
 private:
     atomic_t n_ref_count; // number of interested receivers (sockinfo) [can be modified only in
