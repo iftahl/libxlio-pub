@@ -163,8 +163,8 @@ rfs::~rfs()
     // If filter, need to detach flow only if this is the last attached rule for this specific
     // filter group (i.e. counter == 0)
     if (m_p_rule_filter && m_b_tmp_is_attached) {
-        int counter = 0;
-        prepare_filter_detach(counter, true);
+        int counter = 1;
+        prepare_filter_detach(counter, (safe_mce_sys().cps_wa_bind_dedicated_ip && m_p_rule_filter->m_key.get_in_port() == 0) ? false : true);
         if (counter == 0) {
             if (m_p_ring->is_simple()) {
                 destroy_flow();
@@ -324,7 +324,7 @@ bool rfs::detach_flow(pkt_rcvr_sink *sink)
     prepare_filter_detach(filter_counter, false);
 
     // We also need to check if this is the LAST sink so we need to call ibv_attach_flow
-    if (m_p_ring->is_simple() && (m_n_sinks_list_entries == 0) && (filter_counter == 0)) {
+    if (m_p_ring->is_simple() && (m_n_sinks_list_entries == 0) && (filter_counter == 0) && safe_mce_sys().cps_wa_bind_dedicated_ip && m_p_rule_filter->m_key.get_in_port() != 0) {
         ret = destroy_flow();
     }
 

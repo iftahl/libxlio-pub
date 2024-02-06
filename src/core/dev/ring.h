@@ -80,7 +80,7 @@ public:
     virtual void print_val();
 
     virtual bool attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink,
-                             bool force_5t = false) = 0;
+                             bool force_5t = false, bool use_2t = false) = 0;
     virtual bool detach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink) = 0;
 
     virtual void restart() = 0;

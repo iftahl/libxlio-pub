@@ -233,8 +233,9 @@ void ring_tap::tap_destroy()
     }
 }
 
-bool ring_tap::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t)
+bool ring_tap::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t, bool use_2t)
 {
+    NOT_IN_USE(use_2t);
     std::lock_guard<decltype(m_lock_ring_rx)> lock(m_lock_ring_rx);
     bool ret = ring_slave::attach_flow(flow_spec_5t, sink, force_5t);
 

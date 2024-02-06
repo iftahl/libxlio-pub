@@ -99,8 +99,9 @@ void ring_bond::print_val()
                 ((uintptr_t)this == (uintptr_t)m_parent ? 0 : m_parent), "bond");
 }
 
-bool ring_bond::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t)
+bool ring_bond::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t, bool use_2t)
 {
+    NOT_IN_USE(use_2t);
     bool ret = true;
     struct flow_sink_t value = {flow_spec_5t, sink};
 

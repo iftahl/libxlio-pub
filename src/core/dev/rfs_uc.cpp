@@ -117,21 +117,26 @@ bool rfs_uc::prepare_flow_spec()
             (g_map_udp_bounded_port.count(ntohs(m_flow_tuple.get_dst_port()))))
 #endif
         {
-            int src_port;
-            if (g_p_app->add_second_4t_rule) {
-                src_port = g_p_app->workers_num + g_p_app->get_worker_id();
+            if (m_p_rule_filter->m_key.get_in_port() == 0) {
+                p_attach_flow_data->ibv_flow_attr.priority = 1;
+                m_flow_tuple.set_dst_port(0);
             } else {
-                src_port = g_p_app->get_worker_id();
+                int src_port;
+                if (g_p_app->add_second_4t_rule) {
+                    src_port = g_p_app->workers_num + g_p_app->get_worker_id();
+                } else {
+                    src_port = g_p_app->get_worker_id();
+                }
+                p_tcp_udp->val.src_port = htons((uint16_t)src_port * g_p_app->src_port_stride);
+                p_tcp_udp->mask.src_port =
+                    htons((uint16_t)((g_p_app->workers_pow2 * g_p_app->src_port_stride) - 2));
+                p_attach_flow_data->ibv_flow_attr.priority = 1;
+                rfs_logdbg("src_port_stride: %d workers_num %d \n", g_p_app->src_port_stride,
+                        g_p_app->workers_num);
+                rfs_logdbg("sp_tcp_udp->val.src_port: %d p_tcp_udp->mask.src_port %d \n",
+                        ntohs(p_tcp_udp->val.src_port), ntohs(p_tcp_udp->mask.src_port));
+                m_flow_tuple.set_src_port(p_tcp_udp->val.src_port);
             }
-            p_tcp_udp->val.src_port = htons((uint16_t)src_port * g_p_app->src_port_stride);
-            p_tcp_udp->mask.src_port =
-                htons((uint16_t)((g_p_app->workers_pow2 * g_p_app->src_port_stride) - 2));
-            p_attach_flow_data->ibv_flow_attr.priority = 1;
-            rfs_logdbg("src_port_stride: %d workers_num %d \n", g_p_app->src_port_stride,
-                       g_p_app->workers_num);
-            rfs_logdbg("sp_tcp_udp->val.src_port: %d p_tcp_udp->mask.src_port %d \n",
-                       ntohs(p_tcp_udp->val.src_port), ntohs(p_tcp_udp->mask.src_port));
-            m_flow_tuple.set_src_port(p_tcp_udp->val.src_port);
         }
     }
 #endif

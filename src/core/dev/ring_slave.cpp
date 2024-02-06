@@ -158,8 +158,9 @@ void ring_slave::inc_tx_retransmissions_stats(ring_user_id_t)
 
 template <typename KEY4T, typename KEY2T, typename HDR>
 bool steering_handler<KEY4T, KEY2T, HDR>::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink,
-                                                      bool force_5t)
+                                                      bool force_5t, bool use_2t)
 {
+    int *rule_counter = nullptr;
     rfs *p_rfs;
     rfs *p_tmp_rfs = NULL;
     sockinfo *si = static_cast<sockinfo *>(sink);
@@ -296,7 +297,7 @@ bool steering_handler<KEY4T, KEY2T, HDR>::attach_flow(flow_tuple &flow_spec_5t, 
         KEY4T rfs_key(flow_spec_5t.get_dst_ip(), flow_spec_5t.get_src_ip(),
                       flow_spec_5t.get_dst_port(), flow_spec_5t.get_src_port());
         sock_addr rule_key(flow_spec_5t.get_family(), &flow_spec_5t.get_dst_ip(),
-                           flow_spec_5t.get_dst_port());
+                           use_2t ? 0 : flow_spec_5t.get_dst_port());
         rfs_rule_filter *dst_port_filter = NULL;
         if (safe_mce_sys().tcp_3t_rules) {
             auto dst_port_iter = m_ring.m_tcp_dst_port_attach_map.find(rule_key);
@@ -319,7 +320,15 @@ bool steering_handler<KEY4T, KEY2T, HDR>::attach_flow(flow_tuple &flow_spec_5t, 
         if (itr == end(m_flow_tcp_map)) {
             // It means that no rfs object exists so I need to create a new one and insert it to
             // the flow map
-            if (!force_5t && safe_mce_sys().tcp_3t_rules) {
+            if (use_2t) {
+                flow_tuple tcp_3t_only(flow_spec_5t.get_dst_ip(), 0,
+                                       flow_spec_5t.get_src_ip(), flow_spec_5t.get_src_port(), flow_spec_5t.get_protocol(),
+                                       flow_spec_5t.get_family());
+                dst_port_filter =
+                    new rfs_rule_filter(m_ring.m_tcp_dst_port_attach_map, rule_key, tcp_3t_only);
+                rule_counter = &m_ring.m_tcp_dst_port_attach_map[rule_key].counter;
+            }
+            else if (!force_5t && safe_mce_sys().tcp_3t_rules) {
                 flow_tuple tcp_3t_only(flow_spec_5t.get_dst_ip(), flow_spec_5t.get_dst_port(),
                                        ip_address::any_addr(), 0, flow_spec_5t.get_protocol(),
                                        flow_spec_5t.get_family());
@@ -365,6 +374,10 @@ bool steering_handler<KEY4T, KEY2T, HDR>::attach_flow(flow_tuple &flow_spec_5t, 
 
     bool ret = p_rfs->attach_flow(sink);
     if (ret) {
+        if (rule_counter) {
+            (*rule_counter)++;
+        }
+        
         if (flow_tag_id && (flow_tag_id != FLOW_TAG_MASK)) {
             // A flow with FlowTag was attached succesfully, check stored rfs for fast path be
             // tag_id
@@ -386,12 +399,12 @@ bool steering_handler<KEY4T, KEY2T, HDR>::attach_flow(flow_tuple &flow_spec_5t, 
     return ret;
 }
 
-bool ring_slave::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t)
+bool ring_slave::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t, bool use_2t)
 {
     std::lock_guard<decltype(m_lock_ring_rx)> lock(m_lock_ring_rx);
 
     return (flow_spec_5t.get_family() == AF_INET
-                ? m_steering_ipv4.attach_flow(flow_spec_5t, sink, force_5t)
+                ? m_steering_ipv4.attach_flow(flow_spec_5t, sink, force_5t, use_2t)
                 : m_steering_ipv6.attach_flow(flow_spec_5t, sink, force_5t));
 }
 
@@ -482,10 +495,14 @@ bool steering_handler<KEY4T, KEY2T, HDR>::detach_flow(flow_tuple &flow_spec_5t, 
                            flow_spec_5t.get_dst_port());
         if (safe_mce_sys().tcp_3t_rules) {
             auto dst_port_iter = m_ring.m_tcp_dst_port_attach_map.find(rule_key);
-            BULLSEYE_EXCLUDE_BLOCK_START
             if (dst_port_iter == m_ring.m_tcp_dst_port_attach_map.end()) {
-                ring_logdbg("Could not find matching counter for TCP src port!");
-                BULLSEYE_EXCLUDE_BLOCK_END
+                rule_key.set_in_port(0);
+                auto dst_port_iter2 = m_ring.m_tcp_dst_port_attach_map.find(rule_key);
+                if (dst_port_iter2 == m_ring.m_tcp_dst_port_attach_map.end()) {
+                    ring_logdbg("Could not find matching counter for TCP src port!");
+                } else {
+                    keep_in_map = m_ring.m_tcp_dst_port_attach_map[rule_key].counter = std::max(0, ((dst_port_iter2->second.counter) - 1));
+                }
             } else {
                 keep_in_map = m_ring.m_tcp_dst_port_attach_map[rule_key].counter =
                     std::max(0, ((dst_port_iter->second.counter) - 1));
