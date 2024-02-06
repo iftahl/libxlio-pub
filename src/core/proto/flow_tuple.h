@@ -65,6 +65,7 @@ public:
     bool is_3_tuple() const;
 
     void set_src_port(in_port_t v) { m_src_port = v; }
+    void set_dst_port(in_port_t v) { m_dst_port = v; }
 
     flow_tuple &operator=(const flow_tuple &ft);
     flow_tuple &operator=(flow_tuple &&ft);

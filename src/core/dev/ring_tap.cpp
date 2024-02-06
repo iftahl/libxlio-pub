@@ -233,7 +233,7 @@ void ring_tap::tap_destroy()
     }
 }
 
-bool ring_tap::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t)
+bool ring_tap::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool force_5t, bool use_2t)
 {
     std::lock_guard<decltype(m_lock_ring_rx)> lock(m_lock_ring_rx);
     bool ret = ring_slave::attach_flow(flow_spec_5t, sink, force_5t);
@@ -246,7 +246,7 @@ bool ring_tap::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool f
             if (!g_b_exit) {
                 ring_logwarn("Add TC rule failed with error=%d", rc);
             }
-            ring_slave::detach_flow(flow_spec_5t, sink);
+            ring_slave::detach_flow(flow_spec_5t, sink, use_2t);
             ret = false;
         }
     }
@@ -254,10 +254,10 @@ bool ring_tap::attach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool f
     return ret;
 }
 
-bool ring_tap::detach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink)
+bool ring_tap::detach_flow(flow_tuple &flow_spec_5t, pkt_rcvr_sink *sink, bool detach_2t)
 {
     std::lock_guard<decltype(m_lock_ring_rx)> lock(m_lock_ring_rx);
-    bool ret = ring_slave::detach_flow(flow_spec_5t, sink);
+    bool ret = ring_slave::detach_flow(flow_spec_5t, sink, detach_2t);
 
     if (flow_spec_5t.is_tcp() || flow_spec_5t.is_udp_uc()) {
         int rc = 0;

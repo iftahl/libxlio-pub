@@ -897,7 +897,7 @@ bool sockinfo::attach_receiver(flow_tuple_with_local_if &flow_key)
     // Attach tuple
     BULLSEYE_EXCLUDE_BLOCK_START
     unlock_rx_q();
-    if (!p_nd_resources->p_ring->attach_flow(flow_key, this, is_outgoing())) {
+    if (!p_nd_resources->p_ring->attach_flow(flow_key, this, is_outgoing(), m_bind_no_port && safe_mce_sys().cps_wa_bind_dedicated_ip)) {
         lock_rx_q();
         si_logdbg("Failed to attach %s to ring %p", flow_key.to_str().c_str(),
                   p_nd_resources->p_ring);
@@ -985,7 +985,7 @@ bool sockinfo::detach_receiver(flow_tuple_with_local_if &flow_key)
 
     // Detach tuple
     unlock_rx_q();
-    p_ring->detach_flow(flow_key, this);
+    p_ring->detach_flow(flow_key, this, m_bind_no_port && safe_mce_sys().cps_wa_bind_dedicated_ip);
     lock_rx_q();
 
     // Un-map flow from local map
@@ -1221,7 +1221,8 @@ void sockinfo::do_rings_migration_rx(resource_allocation_key &old_key)
             si_logdbg("Detaching %s from ring %p", flow_key.to_str().c_str(), p_old_ring);
             // Detach tuple
             unlock_rx_q();
-            p_old_ring->detach_flow(flow_key, this);
+            p_old_ring->detach_flow(flow_key, this,
+                                    m_bind_no_port && safe_mce_sys().cps_wa_bind_dedicated_ip);
             lock_rx_q();
             rx_del_ring_cb(p_old_ring);
 

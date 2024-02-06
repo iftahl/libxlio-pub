@@ -1958,6 +1958,9 @@ void mce_sys_var::get_env_params()
         os_events_in_internal_thread_epoll = atoi(env_ptr) ? true : false;
     }
 
+    if ((env_ptr = getenv(SYS_VAR_CPS_WA_BIND_DEDICATED_IP)) != NULL) {
+        cps_wa_bind_dedicated_ip = atoi(env_ptr) ? true : false;
+    }
 #if defined(DEFINED_NGINX)
     if ((env_ptr = getenv(SYS_VAR_NGINX_UDP_POOL_SIZE)) != NULL) {
         nginx_udp_socket_pool_size = (uint32_t)atoi(env_ptr);
