@@ -809,6 +809,8 @@ void print_xlio_global_settings()
     VLOG_PARAM_NUMBER(
         "Max RX reuse buffs UDP pool", safe_mce_sys().nginx_udp_socket_pool_rx_num_buffs_reuse,
         MCE_DEFAULT_NGINX_UDP_POOL_RX_NUM_BUFFS_REUSE, SYS_VAR_NGINX_UDP_POOL_RX_NUM_BUFFS_REUSE);
+    VLOG_PARAM_NUMBER("Use dedicated IP per Nginx worker", safe_mce_sys().cps_wa_bind_dedicated_ip,
+                      MCE_DEFAULT_CPS_WA_BIND_DEDICATED_IP, SYS_VAR_CPS_WA_BIND_DEDICATED_IP);
 #endif
 #if defined(DEFINED_ENVOY)
     VLOG_PARAM_NUMBER("Number of Envoy workers",

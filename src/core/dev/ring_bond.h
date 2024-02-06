@@ -71,8 +71,8 @@ public:
     virtual void wait_for_notification_and_process_element(uint64_t *p_cq_poll_sn,
                                                            void *pv_fd_ready_array = nullptr);
     virtual int get_num_resources() const { return m_bond_rings.size(); };
-    virtual bool attach_flow(flow_tuple &flow_spec_5t, sockinfo *sink, bool force_5t = false);
-    virtual bool detach_flow(flow_tuple &flow_spec_5t, sockinfo *sink);
+    virtual bool attach_flow(flow_tuple &flow_spec_5t, sockinfo *sink, bool force_5t = false, bool use_2t = false);
+    virtual bool detach_flow(flow_tuple &flow_spec_5t, sockinfo *sink, bool detach_2t = false);
     virtual void restart();
     virtual mem_buf_desc_t *mem_buf_tx_get(ring_user_id_t id, bool b_block, pbuf_type type,
                                            int n_num_mem_bufs = 1);

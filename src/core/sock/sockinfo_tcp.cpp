@@ -2791,8 +2791,19 @@ int sockinfo_tcp::bind(const sockaddr *__addr, socklen_t __addrlen)
 
     lock_tcp_con();
 
-    if (m_bind_no_port && handle_bind_no_port(ret, in_port, __addr, __addrlen)) {
-        UNLOCK_RET(ret);
+    sock_addr sock_addr_addr(__addr, __addrlen);
+    const sockaddr *final_sockaddr = sock_addr_addr.get_p_sa();
+
+    if (m_bind_no_port) {
+        if (safe_mce_sys().cps_wa_bind_dedicated_ip && m_sock_state != TCP_SOCK_BOUND_NO_PORT) {
+            in_addr_t net_addr = sock_addr_addr.get_ip_addr().get_in_addr();
+            net_addr += htonl(g_p_app->get_worker_id());
+            ip_address final_ip_address(net_addr);
+            sock_addr_addr.set_in_addr(final_ip_address);            
+        }
+        if (handle_bind_no_port(ret, in_port, final_sockaddr, __addrlen)) {
+            UNLOCK_RET(ret);
+        }
     }
 
     if (INPORT_ANY == in_port && (m_pcb.so_options & SOF_REUSEADDR)) {
@@ -2807,7 +2818,7 @@ int sockinfo_tcp::bind(const sockaddr *__addr, socklen_t __addrlen)
             return ret;
         }
         BULLSEYE_EXCLUDE_BLOCK_END
-        ret = SYSCALL(bind, m_fd, __addr, __addrlen);
+        ret = SYSCALL(bind, m_fd, final_sockaddr, __addrlen);
         reuse = 1;
         int rv = SYSCALL(setsockopt, m_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
         BULLSEYE_EXCLUDE_BLOCK_START
@@ -2821,7 +2832,7 @@ int sockinfo_tcp::bind(const sockaddr *__addr, socklen_t __addrlen)
         }
     } else {
         si_tcp_logdbg("OS bind to %s", sockaddr2str(__addr, __addrlen, true).c_str());
-        ret = SYSCALL(bind, m_fd, __addr, __addrlen);
+        ret = SYSCALL(bind, m_fd, final_sockaddr, __addrlen);
     }
 
 #if defined(DEFINED_NGINX) || defined(DEFINED_ENVOY)
