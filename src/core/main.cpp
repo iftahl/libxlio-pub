@@ -1018,6 +1018,8 @@ static doca_error_t init_doca_flow()
 {
     doca_error_t result, tmp_result;
     struct doca_flow_cfg *rxq_flow_cfg;
+    cpu_set_t mask;
+    pid_t pid;
 
 #if defined(DEFINED_NGINX)
     // Skip DOCA Flow initialization for Nginx master process.
@@ -1043,12 +1045,20 @@ static doca_error_t init_doca_flow()
         goto destroy_cfg;
     }
 
-    // TODO: Causes Nginx huge performance degradation and high SoftIRQ.
-    // result = doca_flow_init(rxq_flow_cfg);
-    // if (result != DOCA_SUCCESS) {
-    //    VPRINT_DOCA_ERR(VLOG_ERROR, result, "doca_flow_init\n");
-    //    goto destroy_cfg;
-    //}
+    // Inside doca_flow_init DPDK changes CPU affinity.
+    // This WA restores affinity after doca_flow_init.
+    pid = getpid();
+    sched_getaffinity(pid, sizeof(cpu_set_t), &mask);
+
+    result = doca_flow_init(rxq_flow_cfg);
+    if (result != DOCA_SUCCESS) {
+        VPRINT_DOCA_ERR(VLOG_ERROR, result, "doca_flow_init\n");
+        goto destroy_cfg;
+    }
+
+    sleep(1); // Let DPDK organize itself.
+
+    sched_setaffinity(pid, sizeof(cpu_set_t), &mask);
 
 destroy_cfg:
     tmp_result = doca_flow_cfg_destroy(rxq_flow_cfg);
