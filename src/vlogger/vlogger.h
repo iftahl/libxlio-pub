@@ -284,6 +284,14 @@
     logger("DOCA error: %s, %s. " log_fmt, doca_error_get_name(err), doca_error_get_descr(err),    \
            ##log_args)
 
+#define PRINT_DOCA_LEVEL(logger, level, err, log_fmt, log_args...)                                 \
+    logger(level, "DOCA error: %s, %s. " log_fmt, doca_error_get_name(err),                        \
+           doca_error_get_descr(err), ##log_args)
+
+#define PRINT_DOCA_ERR_RET(logger, err, log_fmt, log_args...)                                      \
+    PRINT_DOCA_ERR(logger, err, log_fmt);                                                          \
+    return err;
+
 #define VPRINT_DOCA_ERR(level, err, log_fmt, log_args...)                                          \
     vlog_printf(level, "DOCA error: %s, %s. " log_fmt, doca_error_get_name(err),                   \
                 doca_error_get_descr(err), ##log_args)

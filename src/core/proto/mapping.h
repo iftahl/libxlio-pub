@@ -110,6 +110,7 @@ private:
     ib_ctx_handler *m_ib_ctx;
     xlio_registrator m_registrator;
     list_node<mapping_t, mapping_t::mapping_node_offset> m_node;
+    doca_mmap *m_p_mmap = nullptr;
 };
 
 struct mapping_cache_stats {
