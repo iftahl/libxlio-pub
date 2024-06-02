@@ -132,7 +132,7 @@ int mapping_t::map(int fd)
         goto failed_close_fd;
     }
 
-    result = m_registrator.register_memory(m_addr, m_size, m_ib_ctx);
+    result = m_registrator.register_memory(m_addr, m_size, &m_p_mmap);
     if (!result) {
         map_logerr("Failed to register mmapped memory");
         goto failed_unmap;
@@ -165,7 +165,7 @@ int mapping_t::unmap(void)
     map_logdbg("Unmapped: pid=%u fd=%d addr=%p size=%zu.", (unsigned)getpid(), m_fd, m_addr,
                m_size);
 
-    m_registrator.deregister_memory();
+    m_registrator.deregister_memory(&m_p_mmap);
     rc = munmap(m_addr, m_size);
     if (rc < 0) {
         map_logerr("munmap() errno=%d (%s)", errno, strerror(errno));

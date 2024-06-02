@@ -42,6 +42,8 @@
 #include "utils/lock_wrapper.h"
 #include "util/sys_vars.h" // alloc_mode_t, alloc_t, free_t
 
+#include <doca_mmap.h>
+
 // Forward declarations
 class ib_ctx_handler;
 
@@ -84,17 +86,14 @@ public:
     xlio_registrator();
     virtual ~xlio_registrator();
 
-    bool register_memory(void *data, size_t size, ib_ctx_handler *p_ib_ctx_h, uint64_t access);
-    bool register_memory(void *data, size_t size, ib_ctx_handler *p_ib_ctx_h);
-    void deregister_memory();
+    bool register_memory(void *data, size_t size, doca_mmap **mmap);
+    void deregister_memory(doca_mmap **mmap);
 
     uint32_t find_lkey_by_ib_ctx(ib_ctx_handler *p_ib_ctx_h) const;
 
 private:
-    uint32_t register_memory_single(void *data, size_t size, ib_ctx_handler *p_ib_ctx_h,
-                                    uint64_t access);
-
     std::unordered_map<ib_ctx_handler *, uint32_t> m_lkey_map_ib_ctx;
+    doca_mmap *m_p_doca_mmap = nullptr;
 };
 
 class xlio_allocator_hw : public xlio_allocator, public xlio_registrator {
@@ -104,9 +103,7 @@ public:
     xlio_allocator_hw(alloc_t alloc_func, free_t free_func);
     virtual ~xlio_allocator_hw();
 
-    void *alloc_and_reg_mr(size_t size, ib_ctx_handler *p_ib_ctx_h, uint64_t access);
-    void *alloc_and_reg_mr(size_t size, ib_ctx_handler *p_ib_ctx_h);
-    bool register_memory(ib_ctx_handler *p_ib_ctx_h);
+    bool register_memory();
 };
 
 class xlio_heap {
@@ -116,7 +113,7 @@ public:
     static void finalize();
 
     void *alloc(size_t &size);
-    bool register_memory(ib_ctx_handler *p_ib_ctx_h);
+    bool register_memory();
     uint32_t find_lkey_by_ib_ctx(ib_ctx_handler *p_ib_ctx_h) const;
 
     bool is_hw() const { return m_b_hw; }
@@ -142,13 +139,14 @@ public:
     ~xlio_allocator_heap();
 
     void *alloc(size_t &size);
-    void *alloc_and_reg_mr(size_t &size, ib_ctx_handler *p_ib_ctx_h);
-    bool register_memory(ib_ctx_handler *p_ib_ctx_h);
+    bool register_memory();
     uint32_t find_lkey_by_ib_ctx(ib_ctx_handler *p_ib_ctx_h) const;
 
 private:
     xlio_heap *m_p_heap;
     /* Currently we don't support free, so no need to track allocated blocks */
 };
+
+extern doca_mmap *g_p_doca_mmap;
 
 #endif /* _XLIO_DEV_ALLOCATOR_H_ */

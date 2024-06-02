@@ -119,6 +119,8 @@ global_stats_t g_global_stat_static;
 static uint32_t g_ec_pool_size = 0U;
 static uint32_t g_ec_pool_no_objs = 0U;
 
+doca_mmap *g_p_doca_mmap = nullptr;
+
 static int free_libxlio_resources()
 {
     vlog_printf(VLOG_DEBUG, "%s: Closing libxlio resources\n", __FUNCTION__);
@@ -272,6 +274,20 @@ static int free_libxlio_resources()
         delete g_p_agent;
     }
     g_p_agent = nullptr;
+
+    if (g_p_doca_mmap) {
+        doca_error_t rc = doca_mmap_stop(g_p_doca_mmap);
+        if (DOCA_IS_ERROR(rc)) {
+            PRINT_DOCA_LEVEL(vlog_printf, VLOG_ERROR, rc, "doca_mmap_stop");
+        }
+
+        rc = doca_mmap_destroy(g_p_doca_mmap);
+        if (DOCA_IS_ERROR(rc)) {
+            PRINT_DOCA_LEVEL(vlog_printf, VLOG_ERROR, rc, "doca_mmap_destroy");
+        }
+
+        g_p_doca_mmap = nullptr;
+    }
 
     if (safe_mce_sys().app_name) {
         free(safe_mce_sys().app_name);
@@ -1102,6 +1118,7 @@ static void do_global_ctors_helper()
         g_is_forked_child = false;
     }
 
+    g_p_doca_mmap = nullptr;
     xlio_heap::initialize();
 
 #if defined(DEFINED_NGINX) || defined(DEFINED_ENVOY)
