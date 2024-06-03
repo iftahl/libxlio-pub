@@ -466,6 +466,7 @@ public:
     cpu_set_t internal_thread_affinity;
     bool internal_thread_arm_cq_enabled;
     bool handle_bf;
+    bool doca_flow;
     skip_poll_in_rx_t skip_poll_in_rx;
     multilock_t multilock;
 
@@ -798,7 +799,7 @@ extern mce_sys_var &safe_mce_sys();
 #define MCE_DEFAULT_CQ_AIM_INTERVAL_MSEC           (1000)
 #define MCE_DEFAULT_CQ_AIM_INTERRUPTS_RATE_PER_SEC (1000)
 #define MCE_DEFAULT_CQ_POLL_BATCH                  (128)
-#define MCE_DEFAULT_PROGRESS_ENGINE_INTERVAL_MSEC  (10)
+#define MCE_DEFAULT_PROGRESS_ENGINE_INTERVAL_MSEC  (0)
 #define MCE_DEFAULT_PROGRESS_ENGINE_WCE_MAX        (10000)
 #define MCE_DEFAULT_CQ_KEEP_QP_FULL                (true)
 #define MCE_DEFAULT_QP_COMPENSATION_LEVEL          (256)
