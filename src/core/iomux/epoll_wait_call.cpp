@@ -384,7 +384,7 @@ bool epoll_wait_call::handle_os_countdown(int &poll_os_countdown)
     if (cq_ready) {
         // This will empty the cqepfd
         // (most likely in case of a wakeup and probably only under epoll_wait (Not select/poll))
-        ring_wait_for_notification_and_process_element(nullptr);
+        ring_clear_rx_notification();
     }
     /* Before we exit with ready OS fd's we'll check the CQs once more and exit
      * below after calling check_all_offloaded_sockets();
@@ -393,9 +393,8 @@ bool epoll_wait_call::handle_os_countdown(int &poll_os_countdown)
      * will delete ready offloaded fds.
      */
     if (m_n_all_ready_fds) {
-        m_p_stats->n_iomux_os_rx_ready +=
-            m_n_all_ready_fds; // TODO: fix it - we only know all counter, not read counter
-        check_all_offloaded_sockets();
+        // TODO: fix it - we only know all counter, not read counter
+        m_p_stats->n_iomux_os_rx_ready += m_n_all_ready_fds;
         return true;
     }
 
@@ -407,13 +406,12 @@ int epoll_wait_call::ring_poll_and_process_element()
     return m_epfd_info->ring_poll_and_process_element(&m_poll_sn_rx, &m_poll_sn_tx, nullptr);
 }
 
-int epoll_wait_call::ring_request_notification()
+bool epoll_wait_call::ring_request_notification()
 {
-    return m_epfd_info->ring_request_notification(m_poll_sn_rx, m_poll_sn_tx);
+    return m_epfd_info->ring_request_notification();
 }
 
-int epoll_wait_call::ring_wait_for_notification_and_process_element(void *pv_fd_ready_array)
+void epoll_wait_call::ring_clear_rx_notification()
 {
-    return m_epfd_info->ring_wait_for_notification_and_process_element(&m_poll_sn_rx,
-                                                                       pv_fd_ready_array);
+    m_epfd_info->ring_clear_rx_notification();
 }

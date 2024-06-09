@@ -105,9 +105,8 @@ public:
 protected:
     virtual int ring_poll_and_process_element();
 
-    virtual int ring_request_notification();
-
-    virtual int ring_wait_for_notification_and_process_element(void *pv_fd_ready_array);
+    virtual bool ring_request_notification();
+    virtual void ring_clear_rx_notification();
 
     virtual bool handle_os_countdown(int &poll_os_countdown);
 

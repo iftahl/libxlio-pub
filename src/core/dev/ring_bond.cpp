@@ -311,15 +311,11 @@ void ring_bond::restart()
         }
         popup_xmit_rings();
 
-        int ret = 0;
-        uint64_t poll_sn = cq_mgr_rx::m_n_global_sn_rx;
-        ret = request_notification(CQT_RX, poll_sn);
-        if (ret < 0) {
-            ring_logdbg("failed arming cq_mgr_rx (errno=%d %m)", errno);
+        if (!request_notification(CQT_RX)) {
+            ring_logdbg("Failed arming RX notification");
         }
-        ret = request_notification(CQT_TX, poll_sn);
-        if (ret < 0) {
-            ring_logdbg("failed arming cq_mgr_tx (errno=%d %m)", errno);
+        if (!request_notification(CQT_TX)) {
+            ring_logdbg("Failed arming TX notification");
         }
 
         if (m_type == net_device_val::ACTIVE_BACKUP) {
@@ -568,61 +564,32 @@ int ring_bond::drain_and_proccess()
     }
 }
 
-int ring_bond::wait_for_notification_and_process_element(int cq_channel_fd, uint64_t *p_cq_poll_sn,
-                                                         void *pv_fd_ready_array /*NULL*/)
+void ring_bond::clear_rx_notification()
 {
-    if (m_lock_ring_rx.trylock()) {
-        errno = EAGAIN;
-        return -1;
-    }
+    m_lock_ring_rx.lock();
 
-    int temp = 0;
-    int ret = 0;
-
-    for (uint32_t i = 0; i < m_recv_rings.size(); i++) {
+    for (size_t i = 0; i < m_recv_rings.size(); i++) {
         if (m_recv_rings[i]->is_up()) {
-            temp = m_recv_rings[i]->wait_for_notification_and_process_element(
-                cq_channel_fd, p_cq_poll_sn, pv_fd_ready_array);
-            if (temp > 0) {
-                ret += temp;
-            }
+            m_recv_rings[i]->clear_rx_notification();
         }
     }
+
     m_lock_ring_rx.unlock();
-    if (ret > 0) {
-        return ret;
-    } else {
-        return temp;
-    }
 }
 
-int ring_bond::request_notification(cq_type_t cq_type, uint64_t poll_sn)
+bool ring_bond::request_notification(cq_type_t cq_type)
 {
-    ring_slave_vector_t *bond_rings;
-    int ret = 0;
-    int temp;
-
     if (likely(CQT_RX == cq_type)) {
-        if (m_lock_ring_rx.trylock()) {
-            errno = EAGAIN;
-            return 1;
-        }
+        m_lock_ring_rx.lock();
     } else {
-        if (m_lock_ring_tx.trylock()) {
-            errno = EAGAIN;
-            return 1;
-        }
+        m_lock_ring_tx.lock();
     }
 
-    bond_rings = (cq_type == CQT_RX ? &m_recv_rings : &m_xmit_rings);
+    ring_slave_vector_t *bond_rings = (cq_type == CQT_RX ? &m_recv_rings : &m_xmit_rings);
     for (uint32_t i = 0; i < (*bond_rings).size(); i++) {
         if ((*bond_rings)[i]->is_up()) {
-            temp = (*bond_rings)[i]->request_notification(cq_type, poll_sn);
-            if (temp < 0) {
-                ret = temp;
-                break;
-            } else {
-                ret += temp;
+            if (!(*bond_rings)[i]->request_notification(cq_type)) {
+                return false;
             }
         }
     }
@@ -631,7 +598,8 @@ int ring_bond::request_notification(cq_type_t cq_type, uint64_t poll_sn)
     } else {
         m_lock_ring_tx.unlock();
     }
-    return ret;
+
+    return true;
 }
 
 void ring_bond::inc_tx_retransmissions_stats(ring_user_id_t id)

@@ -4824,7 +4824,6 @@ int sockinfo_tcp::getpeername(sockaddr *__name, socklen_t *__namelen)
 
 int sockinfo_tcp::rx_wait_helper(int &poll_count, bool blocking)
 {
-    int ret;
     int n;
     uint64_t poll_sn = 0;
     rx_ring_map_t::iterator rx_ring_iter;
@@ -4894,8 +4893,7 @@ int sockinfo_tcp::rx_wait_helper(int &poll_count, bool blocking)
     /* coverity[double_lock] */
     m_rx_ring_map_lock.lock();
     if (likely(m_p_rx_ring)) {
-        ret = m_p_rx_ring->request_notification(CQT_RX, poll_sn);
-        if (ret != 0) {
+        if (!m_p_rx_ring->request_notification(CQT_RX)) {
             m_rx_ring_map_lock.unlock();
             return 0;
         }
@@ -4907,8 +4905,7 @@ int sockinfo_tcp::rx_wait_helper(int &poll_count, bool blocking)
             }
             ring *p_ring = rx_ring_iter->first;
             if (p_ring) {
-                ret = p_ring->request_notification(CQT_RX, poll_sn);
-                if (ret != 0) {
+                if (!p_ring->request_notification(CQT_RX)) {
                     m_rx_ring_map_lock.unlock();
                     return 0;
                 }
@@ -4930,7 +4927,7 @@ int sockinfo_tcp::rx_wait_helper(int &poll_count, bool blocking)
         return 0;
     }
 
-    ret = os_wait_sock_rx_epfd(rx_epfd_events, SI_RX_EPFD_EVENT_MAX);
+    int ret = os_wait_sock_rx_epfd(rx_epfd_events, SI_RX_EPFD_EVENT_MAX);
 
     lock_tcp_con();
     m_sock_wakeup_pipe.return_from_sleep();
@@ -4965,7 +4962,8 @@ int sockinfo_tcp::rx_wait_helper(int &poll_count, bool blocking)
         if (p_cq_ch_info) {
             ring *p_ring = p_cq_ch_info->get_ring();
             if (p_ring) {
-                p_ring->wait_for_notification_and_process_element(fd, &poll_sn);
+                p_ring->clear_rx_notification();
+                p_ring->poll_and_process_element_rx(&poll_sn);
             }
         }
     }

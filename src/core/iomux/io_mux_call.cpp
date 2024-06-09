@@ -260,7 +260,7 @@ bool io_mux_call::handle_os_countdown(int &poll_os_countdown)
             // This will empty the cqepfd
             // (most likely in case of a wakeup and probably only under epoll_wait (Not
             // select/poll))
-            ring_wait_for_notification_and_process_element(nullptr);
+            ring_clear_rx_notification();
         }
         /* Before we exit with ready OS fd's we'll check the CQs once more and exit
          * below after calling check_all_offloaded_sockets();
@@ -269,9 +269,8 @@ bool io_mux_call::handle_os_countdown(int &poll_os_countdown)
          * will delete ready offloaded fds.
          */
         if (m_n_all_ready_fds) {
-            m_p_stats->n_iomux_os_rx_ready +=
-                m_n_all_ready_fds; // TODO: fix it - we only know all counter, not read counter
-            check_all_offloaded_sockets();
+            // TODO: fix it - we only know all counter, not read counter
+            m_p_stats->n_iomux_os_rx_ready += m_n_all_ready_fds; 
             return true;
         }
         poll_os_countdown = m_n_sysvar_select_poll_os_ratio - 1;
@@ -324,17 +323,11 @@ void io_mux_call::polling_loops()
                       *m_p_num_all_offloaded_fds, m_n_all_ready_fds, m_n_ready_rfds, m_n_ready_wfds,
                       m_n_ready_efds, multiple_polling_loops);
 
-        if (handle_os_countdown(poll_os_countdown)) {
-            // Break if non-offloaded data was found.
-            break;
-        }
-
-        /*
-         * Poll offloaded sockets.
-         * If this is successful we must exit - wait_os() might mess the results.
-         */
-        //__log_func("before check_all_offloaded_sockets");
-        if (check_all_offloaded_sockets()) {
+        bool has_events = handle_os_countdown(poll_os_countdown);
+        has_events |= check_all_offloaded_sockets(); // Poll offloaded sockets.
+        // If check_all_offloaded_sockets was successful we must exit - wait_os()
+        // might mess the results.
+        if (has_events) {
             break;
         }
 
@@ -403,11 +396,8 @@ void io_mux_call::polling_loops()
 
 void io_mux_call::blocking_loops()
 {
-    int ret;
     bool cq_ready = false;
     bool woke_up_non_valid = false;
-    fd_array_t fd_ready_array;
-    fd_ready_array.fd_max = FD_ARRAY_MAX;
 
     prepare_to_block();
 
@@ -423,33 +413,21 @@ void io_mux_call::blocking_loops()
 
         woke_up_non_valid = false;
 
-        ret = ring_request_notification();
         __log_func("arming cq with poll_sn=%lx ret=%d", m_poll_sn_rx, ret);
-        if (ret < 0) {
+        if (!ring_request_notification()) {
             xlio_throw_object(io_mux_call::io_error);
-        } else if (ret > 0) {
-            // arm failed - process pending wce
-            cq_ready = true;
-            fd_ready_array.fd_count = 0;
-            check_all_offloaded_sockets();
-        } else /* ret == 0 */ {
-
+        } else {
             timer_update();
 
             // arming was successful - block on cq
             __log_func("going to sleep (elapsed time: %d sec, %d usec)", m_elapsed.tv_sec,
                        m_elapsed.tv_usec);
-            if (check_all_offloaded_sockets()) {
-                continue;
-            }
 
             cq_ready = wait(m_elapsed);
             __log_func("wait() returned %d, m_n_all_ready_fds=%d", cq_ready, m_n_all_ready_fds);
             if (cq_ready) {
-                fd_ready_array.fd_count = 0;
-                ring_wait_for_notification_and_process_element(&fd_ready_array);
-                // tcp sockets can be accept ready!
                 __log_func("before check_all_offloaded_sockets");
+                ring_clear_rx_notification();
                 check_all_offloaded_sockets();
                 // This hurts epoll and doesn't seem to make a different for the rest
                 // check_rfd_ready_array(&fd_ready_array);
@@ -554,15 +532,14 @@ int io_mux_call::ring_poll_and_process_element()
                                                                           &m_poll_sn_tx, nullptr);
 }
 
-int io_mux_call::ring_request_notification()
+bool io_mux_call::ring_request_notification()
 {
-    return g_p_net_device_table_mgr->global_ring_request_notification(m_poll_sn_rx, m_poll_sn_tx);
+    return g_p_net_device_table_mgr->global_ring_request_notification();
 }
 
-int io_mux_call::ring_wait_for_notification_and_process_element(void *pv_fd_ready_array)
+void io_mux_call::ring_clear_rx_notification()
 {
-    return g_p_net_device_table_mgr->global_ring_wait_for_notification_and_process_element(
-        &m_poll_sn_rx, pv_fd_ready_array);
+    g_p_net_device_table_mgr->global_ring_clear_rx_notification();
 }
 
 bool io_mux_call::is_sig_pending()

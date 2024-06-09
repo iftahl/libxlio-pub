@@ -407,65 +407,51 @@ void ring_simple::create_resources()
     ring_logdbg("new ring_simple() completed");
 }
 
-int ring_simple::request_notification(cq_type_t cq_type, uint64_t poll_sn)
+bool ring_simple::request_notification(cq_type_t cq_type)
 {
-    if (!safe_mce_sys().doca_flow) {
-        int ret = 1;
-        if (likely(CQT_RX == cq_type)) {
-            RING_TRY_LOCK_RUN_AND_UPDATE_RET(m_lock_ring_rx,
-                                             m_p_cq_mgr_rx->request_notification(poll_sn);
-                                             ++m_p_ring_stat->simple.n_rx_interrupt_requests);
-        } else {
-            RING_TRY_LOCK_RUN_AND_UPDATE_RET(m_lock_ring_tx,
-                                             m_p_cq_mgr_tx->request_notification(poll_sn));
-        }
-        return ret;
-    }
-
     bool ret = false;
     if (likely(CQT_RX == cq_type)) {
         m_lock_ring_rx.lock();
-        ret = m_hqrx->request_notification();
+        if (!safe_mce_sys().doca_flow) {
+            ret = m_p_cq_mgr_rx->request_notification();
+        } else {
+            ret = m_hqrx->request_notification();
+        }
         ++m_p_ring_stat->simple.n_rx_interrupt_requests;
         m_lock_ring_rx.unlock();
     } else {
         m_lock_ring_tx.lock();
-        ret = (m_p_cq_mgr_tx->request_notification(poll_sn) >= 0);
+        ret = m_p_cq_mgr_tx->request_notification();
         m_lock_ring_tx.unlock();
     }
 
-    return (ret ? 0 : -1);
+    return ret;
 }
 
-int ring_simple::wait_for_notification_and_process_element(int cq_channel_fd,
-                                                           uint64_t *p_cq_poll_sn,
-                                                           void *pv_fd_ready_array /*NULL*/)
+void ring_simple::clear_rx_notification()
 {
     if (!safe_mce_sys().doca_flow) {
-        int ret = -1;
+        m_lock_ring_rx.lock();
         if (m_p_cq_mgr_rx) {
-            RING_TRY_LOCK_RUN_AND_UPDATE_RET(m_lock_ring_rx,
-                                            m_p_cq_mgr_rx->wait_for_notification_and_process_element(
-                                                p_cq_poll_sn, pv_fd_ready_array);
-                                            ++m_p_ring_stat->simple.n_rx_interrupt_received);
+            m_p_cq_mgr_rx->wait_for_notification();
+            ++m_p_ring_stat->simple.n_rx_interrupt_received;
         } else {
-            ring_logerr("Can't find rx_cq for the rx_comp_event_channel_fd (= %d)", cq_channel_fd);
+            ring_logerr("The m_p_cq_mgr_rx is null");
         }
-
-        return ret;
+        m_lock_ring_rx.unlock();
+        return;
     }
 
-    bool ret = false;
+    m_lock_ring_rx.lock();
+
     if (m_hqrx) {
-        m_lock_ring_rx.lock();
-        ret = m_hqrx->clear_notification_and_process_element();
-        ++m_p_ring_stat->simple.n_rx_interrupt_received;
-        m_lock_ring_rx.unlock();                                                                         \
+        m_hqrx->clear_notification();
+        ++m_p_ring_stat->simple.n_rx_interrupt_received;                                                                         \
     } else {
         ring_logerr("Unable to find RX queue for ring %p", this);
     }
 
-    return ret ? 1 : 0;
+    m_lock_ring_rx.unlock();
 }
 
 int ring_simple::poll_and_process_element_rx(uint64_t *p_cq_poll_sn,
@@ -626,7 +612,7 @@ mem_buf_desc_t *ring_simple::mem_buf_tx_get(ring_user_id_t id, bool b_block, pbu
             buff_list = get_tx_buffers(type, n_num_mem_bufs);
             if (!buff_list) {
                 // Arm the CQ event channel for next Tx buffer release (tx cqe)
-                ret = m_p_cq_mgr_tx->request_notification(poll_sn);
+                ret = m_p_cq_mgr_tx->request_notification();
                 if (ret < 0) {
                     // this is most likely due to cq_poll_sn out of sync, need to poll_cq again
                     ring_logdbg("failed arming cq_mgr_tx (hqtx=%p, cq_mgr_tx=%p) (errno=%d %m)",
@@ -821,7 +807,7 @@ bool ring_simple::is_available_qp_wr(bool b_block, unsigned credits)
             m_lock_ring_tx.lock();
 
             // TODO Resolve race window between previous polling and request_notification
-            ret = m_p_cq_mgr_tx->request_notification(poll_sn);
+            ret = m_p_cq_mgr_tx->request_notification();
             if (ret < 0) {
                 // this is most likely due to cq_poll_sn out of sync, need to poll_cq again
                 ring_logdbg("failed arming cq_mgr_tx (hqtx=%p, cq_mgr_tx=%p) (errno=%d %m)", m_hqtx,

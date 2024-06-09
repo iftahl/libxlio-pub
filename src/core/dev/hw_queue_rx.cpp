@@ -563,7 +563,7 @@ bool hw_queue_rx::request_notification()
     return true;
 }
 
-bool hw_queue_rx::clear_notification_and_process_element()
+void hw_queue_rx::clear_notification()
 {
     if (m_notification_armed) {
         m_notification_armed = false;
@@ -574,8 +574,6 @@ bool hw_queue_rx::clear_notification_and_process_element()
     } else {
         hwqrx_logwarn("Clear notification attempt on unarmed PE. hw_queue_rx: %p", this);
     }
-
-    return poll_and_process_rx();
 }
 
 void hw_queue_rx::modify_moderation(uint16_t period_usec, uint16_t comp_count)
