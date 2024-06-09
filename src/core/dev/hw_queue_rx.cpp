@@ -31,9 +31,11 @@
  */
 
 #include <algorithm>
+#include <thread>
 #include <cinttypes>
 #include <sys/mman.h>
 #include <doca_buf.h>
+#include <sock/sock-app.h>
 #include "dev/hw_queue_rx.h"
 #include "dev/buffer_pool.h"
 #include "dev/ring_simple.h"
@@ -187,6 +189,25 @@ bool hw_queue_rx::prepare_doca_rxq()
                        pe, m_doca_ctx_rxq, m_doca_rxq.get());
         return false;
     }
+
+#if defined(DEFINED_NGINX) || defined(DEFINED_ENVOY)
+    /*
+     * For some scenario with forking usage we may want to distribute CQs across multiple
+     * CPUs to improve CPS in case of multiple processes.
+     */
+    if (safe_mce_sys().app.distribute_cq_interrupts && g_p_app->get_worker_id() >= 0 &&
+        m_p_ib_ctx_handler->is_notification_affinity_supported()) {
+        uint32_t core = g_p_app->get_worker_id() % std::thread::hardware_concurrency();
+        hwqrx_loginfo("Setting PE core affinity: %" PRIu32 ", pid: %d", core, getpid());
+
+        err = doca_pe_set_notification_affinity(pe, core);
+        if (DOCA_IS_ERROR(err)) {
+            PRINT_DOCA_ERR(hwqrx_logerr, err,
+                           "doca_pe_set_notification_affinity pe/ctx/rxq: %p,%p,%p",
+                           pe, m_doca_ctx_rxq, m_doca_rxq.get());
+        }
+    }
+#endif
 
     err = doca_pe_get_notification_handle(pe, &m_notification_handle);
     if (DOCA_IS_ERROR(err)) {
