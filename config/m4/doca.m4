@@ -54,7 +54,7 @@ get_version_number_doca()
         n=${doca_cv_token//[[!0-9]]/ }
         v=(${n//\./ })
 
-        echo "$((${v[[0]]} * 10000 + ${v[[1]]} * 100 + ${v[[2]]}))"
+        echo "$((${v[[0]]} * 10000 + ${v[[1]]} * 100 + $(expr ${v[[2]]} + 0)))"
     else
         echo 0
     fi
