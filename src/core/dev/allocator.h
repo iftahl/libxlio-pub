@@ -143,7 +143,7 @@ public:
     void *alloc(size_t &size);
     bool register_memory();
     uint32_t find_lkey_by_ib_ctx(ib_ctx_handler *p_ib_ctx_h) const;
-    doca_mmap *get_doca_mmap() { return m_p_heap->get_doca_mmap(); }
+    doca_mmap *get_doca_mmap() const { return m_p_heap->get_doca_mmap(); }
 
 private:
     xlio_heap *m_p_heap;

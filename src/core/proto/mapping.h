@@ -83,6 +83,7 @@ public:
 
     /* mem_desc interface */
     uint32_t get_lkey(mem_buf_desc_t *desc, ib_ctx_handler *ib_ctx, const void *addr, size_t len);
+    doca_mmap *get_doca_mmap() const { return m_registrator.get_doca_mmap(); };
     void get(void);
     void put(void);
 
@@ -110,7 +111,6 @@ private:
     ib_ctx_handler *m_ib_ctx;
     xlio_registrator m_registrator;
     list_node<mapping_t, mapping_t::mapping_node_offset> m_node;
-    doca_mmap *m_p_mmap = nullptr;
 };
 
 struct mapping_cache_stats {
