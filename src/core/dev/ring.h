@@ -92,6 +92,11 @@ public:
                                   xlio_wr_tx_packet_attr attr) = 0;
     virtual int send_lwip_buffer(ring_user_id_t id, xlio_ibv_send_wr *p_send_wqe,
                                  xlio_wr_tx_packet_attr attr, xlio_tis *tis) = 0;
+    virtual int send_doca_buffer(struct iovec *iovec)
+    {
+        NOT_IN_USE(iovec);
+        return -1;
+    };
 
     virtual int get_num_resources() const = 0;
     virtual int *get_rx_channel_fds(size_t &length) const

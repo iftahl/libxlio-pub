@@ -42,6 +42,12 @@
 #include "proto/mem_buf_desc.h"
 #include "proto/xlio_lwip.h"
 #include "util/sg_array.h"
+#include <doca_eth_txq.h>
+#include <doca_pe.h>
+#include <doca_buf_inventory.h>
+#include <doca_mmap.h>
+#include <doca_ctx.h>
+#include <doca_eth_txq_cpu_data_path.h>
 
 #ifndef MAX_SUPPORTED_IB_INLINE_SIZE
 #define MAX_SUPPORTED_IB_INLINE_SIZE 884
@@ -200,6 +206,12 @@ public:
                 1U;
         }
     }
+    doca_notification_handle_t get_notification_handle() const
+    {
+        return m_notification_handle;
+    }
+    void send_buff(struct iovec *iovec);
+    void poll_all_completions();
 
 private:
     cq_mgr_tx *init_tx_cq_mgr();
@@ -299,6 +311,39 @@ private:
     std::list<std::unique_ptr<dpcp::tls_dek>> m_tls_dek_get_cache;
     std::list<std::unique_ptr<dpcp::tls_dek>> m_tls_dek_put_cache;
 #endif
+
+    static void destory_doca_txq(doca_eth_txq *txq);
+    static void destory_doca_inventory(doca_buf_inventory *inv);
+    static void destory_doca_pe(doca_pe *pe);
+    bool prepare_doca_txq();
+    void reclaim_tx_buffer(mem_buf_desc_t *buff);
+
+    std::unique_ptr<doca_eth_txq, decltype(&destory_doca_txq)> m_doca_txq {nullptr,
+                                                                           destory_doca_txq};
+    std::unique_ptr<doca_buf_inventory, decltype(&destory_doca_inventory)> m_doca_inventory {
+        nullptr, destory_doca_inventory};
+    std::unique_ptr<doca_pe, decltype(&destory_doca_pe)> m_doca_pe {nullptr, destory_doca_pe};
+
+    doca_mmap *m_doca_mmap = nullptr;
+    doca_ctx *m_doca_ctx_txq = nullptr;
+    descq_t m_polled;
+
+    uint16_t m_doca_rx_queue_id = 0U;
+    uint32_t m_txq_burst_size = 0U;
+    int m_inflight = 0;
+
+    static void tx_task_completion_cb(doca_eth_txq_task_send *task_send, doca_data task_user_data,
+                                      doca_data ctx_user_data);
+    static void tx_task_error_cb(doca_eth_txq_task_send *task_send, doca_data task_user_data,
+                                 doca_data ctx_user_data);
+
+    void return_doca_task(doca_eth_txq_task_send *task_send);
+    void return_doca_buf(doca_buf *buf);
+
+    doca_notification_handle_t m_notification_handle;
+    void handle_completion(mem_buf_desc_t *mem_buf);
+    void start_doca_txq();
+    void stop_doca_txq();
 };
 
 #endif // HW_QUEUE_TX_H

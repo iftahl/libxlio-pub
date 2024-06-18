@@ -771,6 +771,14 @@ int ring_simple::send_lwip_buffer(ring_user_id_t id, xlio_ibv_send_wr *p_send_wq
     return ret;
 }
 
+int ring_simple::send_doca_buffer(struct iovec *iovec)
+{
+    std::lock_guard<decltype(m_lock_ring_tx)> lock(m_lock_ring_tx);
+    m_hqtx->send_buff(iovec);
+    m_hqtx->poll_all_completions();
+    return 0;
+}
+
 /*
  * called under m_lock_ring_tx lock
  */

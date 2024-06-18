@@ -38,6 +38,7 @@
 #include "dev/cq_mgr_rx_regrq.h"
 #include "proto/tls.h"
 #include "util/valgrind.h"
+#include <doca_buf.h>
 
 #undef MODULE_NAME
 #define MODULE_NAME "hw_queue_tx"
@@ -125,8 +126,13 @@ hw_queue_tx::hw_queue_tx(ring_simple *ring, const slave_data_t *slave, const uin
     , m_n_sysvar_tx_num_wr_to_signal(safe_mce_sys().tx_num_wr_to_signal)
     , m_tx_num_wr(tx_num_wr)
     , m_port_num(slave->port_num)
+    , m_doca_mmap(g_buffer_pool_tx->get_doca_mmap())
 {
     hwqtx_logfunc("");
+
+    if (!prepare_doca_txq()) {
+        throw_xlio_exception("Failed to create DOCA TXQ");
+    }
 
     memset(&m_mlx5_qp, 0, sizeof(m_mlx5_qp));
 
@@ -148,6 +154,8 @@ hw_queue_tx::hw_queue_tx(ring_simple *ring, const slave_data_t *slave, const uin
 hw_queue_tx::~hw_queue_tx()
 {
     hwqtx_logfunc("");
+
+    m_doca_txq.reset(nullptr); // Must be destroyed before TX PE.
 
     if (m_sq_wqe_idx_to_prop) {
         if (0 != munmap(m_sq_wqe_idx_to_prop, m_tx_num_wr * sizeof(*m_sq_wqe_idx_to_prop))) {
@@ -299,6 +307,8 @@ int hw_queue_tx::configure(const slave_data_t *slave)
 
 void hw_queue_tx::up()
 {
+    start_doca_txq();
+
     init_queue();
 
     // Add buffers
@@ -315,6 +325,8 @@ void hw_queue_tx::up()
 
 void hw_queue_tx::down()
 {
+    stop_doca_txq();
+
     if (m_dm_enabled) {
         m_dm_mgr.release_resources();
     }
@@ -839,6 +851,8 @@ void hw_queue_tx::store_current_wqe_prop(mem_buf_desc_t *buf, unsigned credits, 
 void hw_queue_tx::send_to_wire(xlio_ibv_send_wr *p_send_wqe, xlio_wr_tx_packet_attr attr,
                                bool request_comp, xlio_tis *tis, unsigned credits)
 {
+    return;
+
     struct xlio_mlx5_wqe_ctrl_seg *ctrl = nullptr;
     struct mlx5_wqe_eth_seg *eseg = nullptr;
     uint32_t tisn = tis ? tis->get_tisn() : 0;
@@ -1570,4 +1584,338 @@ int hw_queue_tx::modify_qp_ratelimit(struct xlio_rate_limit_t &rate_limit, uint3
 
     m_rate_limit = rate_limit;
     return 0;
+}
+
+void hw_queue_tx::destory_doca_txq(doca_eth_txq *txq)
+{
+    doca_error_t err = doca_eth_txq_destroy(txq);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(__log_err, err, "doca_eth_txq_destroy txq: %p", txq);
+    }
+}
+
+void hw_queue_tx::destory_doca_inventory(doca_buf_inventory *inv)
+{
+    doca_error_t err = doca_buf_inventory_destroy(inv);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(__log_err, err, "doca_buf_inventory_destroy Inv: %p", inv);
+    }
+}
+
+void hw_queue_tx::destory_doca_pe(doca_pe *pe)
+{
+    doca_error_t err = doca_pe_destroy(pe);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(__log_err, err, "doca_pe_destroy PE: %p", pe);
+    }
+}
+
+bool hw_queue_tx::prepare_doca_txq()
+{
+    doca_dev *dev = m_p_ib_ctx_handler->get_doca_device();
+    doca_devinfo *devinfo = doca_dev_as_devinfo(dev);
+
+    doca_error_t type_supported = doca_eth_txq_cap_is_type_supported(
+        devinfo, DOCA_ETH_TXQ_TYPE_REGULAR, DOCA_ETH_TXQ_DATA_PATH_TYPE_CPU);
+
+    uint32_t max_burst_size = 0U;
+    // TODO check for the correct 2 values for list size and lso header
+    doca_error_t err = doca_eth_txq_cap_get_max_burst_size(devinfo, 1, 0, &max_burst_size);
+
+    if (DOCA_IS_ERROR(type_supported) || DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, type_supported, "doca_eth_txq_cap_is_type_supported");
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_cap_get_max_burst_size");
+        return false;
+    }
+
+    hwqtx_loginfo("TXQ caps MaxBurstSize %u,Dev:%s", max_burst_size,
+                  m_p_ib_ctx_handler->get_ibname().c_str());
+
+    m_txq_burst_size = (align32pow2(safe_mce_sys().tx_num_wr));
+    if (m_txq_burst_size > max_burst_size) {
+        hwqtx_logwarn("Decreasing BurstSize %u to capability %u.", m_txq_burst_size,
+                      max_burst_size);
+        m_txq_burst_size = max_burst_size;
+    }
+
+    hwqtx_loginfo("Creating DOCA TXQ MaxBurstSize: %u, Dev:%s", m_txq_burst_size,
+                  m_p_ib_ctx_handler->get_ibname().c_str());
+
+    doca_eth_txq *txq = nullptr;
+    err = doca_eth_txq_create(dev, m_txq_burst_size, &txq);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_create");
+        return false;
+    }
+
+    err = doca_eth_txq_set_mss(txq, 1500);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_mss");
+        return false;
+    }
+
+    // err = doca_eth_txq_set_max_lso_header_size(txq, 64);
+    // if (DOCA_IS_ERROR(err)) {
+    //     PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_mss");
+    //     return false;
+    // }
+
+    m_doca_txq.reset(txq);
+    m_doca_ctx_txq = doca_eth_txq_as_doca_ctx(txq);
+    // m_txq_task_debt = m_txq_burst_size;
+    // m_rx_buff_pool_treshold_max = m_txq_burst_size * 2U;
+    // m_rx_buff_pool_treshold_min = m_txq_burst_size;
+    // m_rx_debt_submit_treshold = m_txq_burst_size / 2U;
+
+    err = doca_ctx_set_user_data(m_doca_ctx_txq, {.ptr = this});
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_ctx_set_user_data ctx/hw_queue_tx: %p,%p",
+                       m_doca_ctx_txq, this);
+        return false;
+    }
+
+    err = doca_eth_txq_set_type(m_doca_txq.get(), DOCA_ETH_TXQ_TYPE_REGULAR);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_get_type_supported");
+        return false;
+    }
+
+    err = doca_eth_txq_task_send_set_conf(m_doca_txq.get(), tx_task_completion_cb, tx_task_error_cb,
+                                          m_txq_burst_size);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_task_send_set_conf txq: %p max-tasks: %u",
+                       m_doca_txq.get(), m_txq_burst_size);
+        return false;
+    }
+
+    err = doca_eth_txq_set_l3_chksum_offload(m_doca_txq.get(), 1);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_l3_chksum_offload txq: %p",
+                       m_doca_txq.get());
+        return false;
+    }
+
+    err = doca_eth_txq_set_l4_chksum_offload(m_doca_txq.get(), 1);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_l4_chksum_offload txq: %p",
+                       m_doca_txq.get());
+        return false;
+    }
+
+    doca_pe *pe;
+    err = doca_pe_create(&pe);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_pe_create");
+        return false;
+    }
+
+    m_doca_pe.reset(pe);
+
+    err = doca_pe_connect_ctx(pe, m_doca_ctx_txq);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_pe_connect_ctx pe/ctx/txq: %p,%p,%p", pe,
+                       m_doca_ctx_txq, m_doca_txq.get());
+        return false;
+    }
+
+    // err = doca_pe_get_notification_handle(pe, &m_notification_handle);
+    // if (DOCA_IS_ERROR(err)) {
+    //     PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_pe_get_notification_handle");
+    //     return false;
+    // }
+
+    doca_buf_inventory *inventory = nullptr;
+    err = doca_buf_inventory_create(m_txq_burst_size, &inventory);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_buf_inventory_create");
+        return false;
+    }
+
+    m_doca_inventory.reset(inventory);
+
+    err = doca_buf_inventory_start(inventory);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_buf_inventory_start");
+        return false;
+    }
+
+    hwqtx_logdbg("Created DOCA TXQ and PE %p/%p", m_doca_txq.get(), m_doca_pe.get());
+    return true;
+}
+
+void hw_queue_tx::tx_task_completion_cb(doca_eth_txq_task_send *task_send, doca_data task_user_data,
+                                        doca_data ctx_user_data)
+{
+    // mem_buf_desc_t *mem_buf = reinterpret_cast<mem_buf_desc_t *>(task_user_data.ptr);
+    hw_queue_tx *hw_tx = reinterpret_cast<hw_queue_tx *>(ctx_user_data.ptr);
+    doca_buf *buf = nullptr;
+    doca_error_t rc = doca_eth_txq_task_send_get_pkt(task_send, &buf);
+    if (unlikely(DOCA_IS_ERROR(rc))) {
+        PRINT_DOCA_ERR(__log_err, rc, "doca_eth_txq_task_send_get_pkt");
+        tx_task_error_cb(task_send, task_user_data, ctx_user_data);
+        return;
+    }
+
+    hw_tx->return_doca_task(task_send);
+    // hw_tx->handle_completion(mem_buf);
+
+    __log_func("tx_task_completion_cb pid: %d\n", (int)getpid());
+}
+
+void hw_queue_tx::tx_task_error_cb(doca_eth_txq_task_send *task_send, doca_data task_user_data,
+                                   doca_data ctx_user_data)
+{
+    mem_buf_desc_t *mem_buf = reinterpret_cast<mem_buf_desc_t *>(task_user_data.ptr);
+    hw_queue_tx *hw_tx = reinterpret_cast<hw_queue_tx *>(ctx_user_data.ptr);
+    doca_ctx_states ctx_state = DOCA_CTX_STATE_STOPPING;
+    doca_error_t rc_state = doca_ctx_get_state(hw_tx->m_doca_ctx_txq, &ctx_state);
+    ctx_state = ((ctx_state != DOCA_CTX_STATE_IDLE) ? ctx_state : DOCA_CTX_STATE_STOPPING);
+    if (rc_state != DOCA_SUCCESS || ctx_state != DOCA_CTX_STATE_STOPPING) {
+        PRINT_DOCA_ERR(__log_err,
+                       doca_task_get_status(doca_eth_txq_task_send_as_doca_task(task_send)),
+                       "TX Task Error");
+        // TODO DOCA: Add statistics for errors
+    }
+
+    __log_func("tx_task_error_cb, task_send: %p, rc_state: %d, ctx_state: %d", task_send, rc_state,
+               ctx_state);
+
+    hw_tx->return_doca_task(task_send);
+    hw_tx->reclaim_tx_buffer(mem_buf);
+}
+
+void hw_queue_tx::return_doca_task(doca_eth_txq_task_send *task_send)
+{
+    hwqtx_loginfo("return_doca_task!");
+    doca_buf *buf = nullptr;
+    doca_error_t err = doca_eth_txq_task_send_get_pkt(task_send, &buf);
+    if (unlikely(DOCA_IS_ERROR(err))) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_task_send_get_pkt");
+    } else {
+        return_doca_buf(buf);
+    }
+
+    doca_task_free(doca_eth_txq_task_send_as_doca_task(task_send));
+    if (--m_inflight < 0) {
+        hwqtx_logerr("m_inflight is negative...");
+    } else {
+        hwqtx_loginfo("m_inflight=%d", m_inflight);
+    }
+}
+
+void hw_queue_tx::return_doca_buf(doca_buf *buf)
+{
+    hwqtx_loginfo("return_doca_buf!");
+    doca_error_t rc_state = doca_buf_dec_refcount(buf, nullptr);
+    if (unlikely(rc_state != DOCA_SUCCESS)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, rc_state, "doca_buf_dec_refcount");
+    }
+}
+
+void hw_queue_tx::handle_completion(mem_buf_desc_t *mem_buf)
+{
+    hwqtx_loginfo("handle_completion!");
+    m_polled.push_back(mem_buf);
+}
+
+void hw_queue_tx::reclaim_tx_buffer(mem_buf_desc_t *buff)
+{
+    // do {
+    //     if (p->buf) {
+    //         m_p_ring->mem_buf_desc_return_single_locked(p->buf);
+    //     }
+    //     if (p->ti) {
+    //         xlio_ti *ti = p->ti;
+    //         if (ti->m_callback) {
+    //             ti->m_callback(ti->m_callback_arg);
+    //         }
+
+    //         ti->put();
+    //         if (unlikely(ti->m_released && ti->m_ref == 0)) {
+    //             ti->ti_released();
+    //         }
+    //     }
+    //     credits += p->credits;
+
+    //     prev = p;
+    //     p = p->next;
+    // } while (p && m_hqtx_ptr->is_sq_wqe_prop_valid(p, prev));
+    // m_p_ring->return_tx_pool_to_global_pool();
+    // m_hqtx_ptr->credits_return(credits);
+
+    // can be a list of buffers?..
+    m_p_ring->mem_buf_desc_return_single_locked(buff);
+    m_p_ring->return_tx_pool_to_global_pool();
+    // m_hqtx_ptr->credits_return(credits);
+}
+
+void hw_queue_tx::start_doca_txq()
+{
+    hwqtx_logdbg("Starting DOCA TXQ: %p pid: %d", m_doca_txq.get(), getpid());
+
+    doca_error_t err = doca_ctx_start(m_doca_ctx_txq);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_ctx_start(TXQ). TXQ:%p", m_doca_txq.get());
+    }
+
+    hwqtx_loginfo("DOCA TXQ started, ctx: %p", m_doca_ctx_txq);
+
+    // submit_rxq_tasks();
+}
+
+void hw_queue_tx::stop_doca_txq()
+{
+    hwqtx_logdbg("Stopping DOCA TXQ: %p", m_doca_txq.get());
+
+    doca_error_t err = doca_ctx_stop(m_doca_ctx_txq);
+    if (DOCA_ERROR_IN_PROGRESS == err) {
+        doca_ctx_states ctx_state = DOCA_CTX_STATE_STOPPING; // Just to enter the while loop.
+        while (DOCA_CTX_STATE_IDLE != ctx_state) {
+            if (!doca_pe_progress(m_doca_pe.get())) {
+                err = doca_ctx_get_state(m_doca_ctx_txq, &ctx_state);
+                if (err != DOCA_SUCCESS) {
+                    PRINT_DOCA_ERR(hwqtx_logerr, err,
+                                   "Error flushing DOCA TXQ (doca_ctx_get_state). TXQ:%p",
+                                   m_doca_txq.get());
+                    break;
+                }
+            }
+        }
+    } else if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_ctx_stop(TXQ). TXQ:%p", m_doca_txq.get());
+    }
+}
+
+void hw_queue_tx::send_buff(struct iovec *iovec)
+{
+    doca_eth_txq_task_send *task = nullptr;
+    doca_buf *tx_doca_buf = nullptr;
+    // doca_error_t rc = doca_buf_inventory_buf_get_by_addr(
+    //     m_doca_inventory.get(), m_doca_mmap, buff->p_buffer, buff->sz_buffer, &tx_doca_buf);
+    doca_error_t rc = doca_buf_inventory_buf_get_by_data(
+        m_doca_inventory.get(), m_doca_mmap, iovec->iov_base, iovec->iov_len, &tx_doca_buf);
+    if (DOCA_IS_ERROR(rc)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_buf_inventory_buf_get_by_data");
+    }
+
+    rc = doca_eth_txq_task_send_allocate_init(m_doca_txq.get(), tx_doca_buf,
+                                              {.ptr = iovec->iov_base}, &task);
+    if (DOCA_IS_ERROR(rc)) {
+        return_doca_buf(tx_doca_buf);
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_send_allocate_init");
+    }
+
+    hwqtx_loginfo("send_buff: p=%p, size=%zu", iovec->iov_base, iovec->iov_len);
+    ++m_inflight;
+    rc = doca_task_submit(doca_eth_txq_task_send_as_doca_task(task));
+    if (DOCA_IS_ERROR(rc)) {
+        return_doca_task(task);
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_send_as_doca_task");
+    }
+}
+
+void hw_queue_tx::poll_all_completions() {
+    while (m_inflight > 0) {
+		doca_pe_progress(m_doca_pe.get());
+	}
 }

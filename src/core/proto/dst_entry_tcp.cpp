@@ -253,7 +253,17 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
             }
         }
 
-        ret = send_lwip_buffer(m_id, p_send_wqe, attr.flags, attr.tis);
+        if (!is_zerocopy && sz_iov == 1) {
+            ret = m_p_ring->send_doca_buffer(&p_tcp_iov[0].iovec);
+            if (ret == 0) {
+                dst_tcp_loginfo("DOCA send p=%p, size=%zu", p_tcp_iov[0].iovec.iov_base,
+                                p_tcp_iov[0].iovec.iov_len);
+            }
+        } else {
+            dst_tcp_loginfo("Regular send: p=%p, size=%zu", p_tcp_iov[0].iovec.iov_base,
+                            p_tcp_iov[0].iovec.iov_len);
+            ret = send_lwip_buffer(m_id, p_send_wqe, attr.flags, attr.tis);
+        }
     } else { // We don'nt support inline in this case, since we believe that this a very rare case
         mem_buf_desc_t *p_mem_buf_desc;
         size_t total_packet_len = 0;
