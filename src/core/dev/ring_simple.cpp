@@ -421,7 +421,11 @@ bool ring_simple::request_notification(cq_type_t cq_type)
         m_lock_ring_rx.unlock();
     } else {
         m_lock_ring_tx.lock();
-        ret = m_p_cq_mgr_tx->request_notification();
+        if (!safe_mce_sys().doca_tx) {
+            ret = m_p_cq_mgr_tx->request_notification();
+        } else {
+            ret = m_hqtx->request_notification();
+        }
         m_lock_ring_tx.unlock();
     }
 
@@ -474,9 +478,14 @@ int ring_simple::poll_and_process_element_rx(uint64_t *p_cq_poll_sn,
 int ring_simple::poll_and_process_element_tx(uint64_t *p_cq_poll_sn)
 {
     int ret = 0;
-    RING_TRY_LOCK_RUN_AND_UPDATE_RET(m_lock_ring_tx,
-                                     m_p_cq_mgr_tx->poll_and_process_element_tx(p_cq_poll_sn));
-    return ret;
+    if (safe_mce_sys().doca_tx) {
+        RING_TRY_LOCK_RUN_AND_UPDATE_RET(m_lock_ring_tx, m_hqtx->poll_all_completions());
+    } else {
+        RING_TRY_LOCK_RUN_AND_UPDATE_RET(m_lock_ring_tx,
+                                         m_p_cq_mgr_tx->poll_and_process_element_tx(p_cq_poll_sn));
+    }
+
+    return ret ? 1 : 0;
 }
 
 bool ring_simple::reclaim_recv_buffers(descq_t *rx_reuse)
@@ -612,7 +621,11 @@ mem_buf_desc_t *ring_simple::mem_buf_tx_get(ring_user_id_t id, bool b_block, pbu
             buff_list = get_tx_buffers(type, n_num_mem_bufs);
             if (!buff_list) {
                 // Arm the CQ event channel for next Tx buffer release (tx cqe)
-                ret = m_p_cq_mgr_tx->request_notification();
+                if (!safe_mce_sys().doca_tx) {
+                    ret = m_p_cq_mgr_tx->request_notification();
+                } else {
+                    ret = m_hqtx->request_notification();
+                }
                 if (ret < 0) {
                     // this is most likely due to cq_poll_sn out of sync, need to poll_cq again
                     ring_logdbg("failed arming cq_mgr_tx (hqtx=%p, cq_mgr_tx=%p) (errno=%d %m)",
@@ -729,6 +742,7 @@ inline int ring_simple::send_buffer(xlio_ibv_send_wr *p_send_wqe, xlio_wr_tx_pac
         is_available_qp_wr(is_set(attr, XLIO_TX_PACKET_BLOCK), credits)) {
         m_hqtx->send_wqe(p_send_wqe, attr, tis, credits);
     } else {
+        ring_logerr("Silent packet drop, SQ is full!");
         ring_logdbg("Silent packet drop, SQ is full!");
         ret = -1;
         reinterpret_cast<mem_buf_desc_t *>(p_send_wqe->wr_id)->p_next_desc = nullptr;
@@ -771,12 +785,36 @@ int ring_simple::send_lwip_buffer(ring_user_id_t id, xlio_ibv_send_wr *p_send_wq
     return ret;
 }
 
-int ring_simple::send_doca_buffer(struct iovec *iovec)
+int ring_simple::send_doca_buffer(void *ptr, uint32_t len, mem_buf_desc_t *buff)
 {
     std::lock_guard<decltype(m_lock_ring_tx)> lock(m_lock_ring_tx);
-    m_hqtx->send_buff(iovec);
-    m_hqtx->poll_all_completions();
+    return m_hqtx->send_pbuf(ptr, len, buff);
+}
+
+int ring_simple::send_doca_buffer(tcp_iovec *p_tcp_iov, const ssize_t num_iovs)
+{
+    std::lock_guard<decltype(m_lock_ring_tx)> lock(m_lock_ring_tx);
+    m_hqtx->send_multiple_bufs(p_tcp_iov, num_iovs);
+    // for (int i = 0; i < num_iovs; i++) {
+    //     m_hqtx->send_buff(&(p_tcp_iov[i].iovec), nullptr, p_tcp_iov[i].p_desc);
+    // }
     return 0;
+}
+
+int ring_simple::send_doca_buffer(struct iovec *iovec, doca_mmap *mmap, mem_buf_desc_t *buff)
+{
+    std::lock_guard<decltype(m_lock_ring_tx)> lock(m_lock_ring_tx);
+    m_hqtx->send_buff(iovec, mmap, buff);
+    // m_hqtx->poll_all_completions();
+    return 0;
+}
+
+ssize_t ring_simple::send_doca_lso(struct iovec &h, struct pbuf *p, bool is_zerocopy)
+{
+    std::lock_guard<decltype(m_lock_ring_tx)> lock(m_lock_ring_tx);
+    ssize_t ret = m_hqtx->send_lso(h, p, is_zerocopy);
+    m_hqtx->poll_all_completions();
+    return ret;
 }
 
 /*

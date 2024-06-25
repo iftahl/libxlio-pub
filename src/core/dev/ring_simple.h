@@ -92,7 +92,10 @@ public:
                           xlio_wr_tx_packet_attr attr) override;
     int send_lwip_buffer(ring_user_id_t id, xlio_ibv_send_wr *p_send_wqe,
                          xlio_wr_tx_packet_attr attr, xlio_tis *tis) override;
-    int send_doca_buffer(struct iovec *iovec) override;
+    int send_doca_buffer(void *ptr, uint32_t len, mem_buf_desc_t *buff);
+    int send_doca_buffer(struct iovec *iovec, doca_mmap *mmap, mem_buf_desc_t *buff) override;
+    int send_doca_buffer(tcp_iovec *p_tcp_iov, const ssize_t num_iovs) override;
+    ssize_t send_doca_lso(struct iovec &h, struct pbuf *p, bool is_zerocopy) override;
     void mem_buf_desc_return_single_to_owner_tx(mem_buf_desc_t *p_mem_buf_desc) override;
     void mem_buf_desc_return_single_multi_ref(mem_buf_desc_t *p_mem_buf_desc,
                                               unsigned ref) override;

@@ -65,6 +65,105 @@ transport_t dst_entry_tcp::get_transport(const sock_addr &to)
     return TRANS_XLIO;
 }
 
+ssize_t dst_entry_tcp::send_doca_single(struct pbuf *p)
+{
+    // Skip check for m_p_ring->is_active_member(reinterpret_cast<mem_buf_desc_t
+    // *>(p)->p_desc_owner, m_id) I believe it's not needed here.
+
+    ssize_t ret = 0;
+    void *p_ip_hdr;
+    void *p_tcp_hdr;
+
+    if (p->next) {
+        dst_tcp_logerr("Expected a single pbuf");
+        return -1;
+    }
+
+    mem_buf_desc_t *user_data = reinterpret_cast<mem_buf_desc_t *>(p);
+
+    if (unlikely(p->ref > 1)) {
+        /*
+         * First buffer in the vector is used for reference counting.
+         * The reference is released after completion depending on
+         * batching mode.
+         * There is situation, when a buffer resides in the list for
+         * batching completion and the same buffer is queued for
+         * retransmission. In this case, sending the buffer leads to
+         * the list corruption because the buffer is re-inserted.
+         *
+         * As workaround, allocate new fake buffer which will be
+         * assigned to wr_id and used for reference counting. This
+         * buffer is allocated with ref == 1, so we must not increase
+         * it. When completion happens, ref becomes 0 and the fake
+         * buffer is released.
+         *
+         * We don't change data, only pointer to buffer descriptor.
+         */
+        // mem_buf_desc_t *p_mem_buf_desc = get_buffer((pbuf_type)p->type, &(p->desc), !!(flags &
+        // XLIO_TX_PACKET_BLOCK)); if (!p_mem_buf_desc) {
+        //     return -1;
+        // }
+        // user_data = p_mem_buf_desc;
+
+        dst_tcp_logwarn(
+            "There is no such list in DOCA implementation. Need to test if this scenario works");
+        p->ref++;
+    } else {
+        p->ref++;
+    }
+
+    uint32_t total_packet_len = p->len + m_header->m_total_hdr_len;
+    void *p_pkt = (void *)((uint8_t *)p->payload - m_header->m_aligned_l2_l3_len);
+    m_header->copy_l2_ip_hdr(p_pkt);
+    uint16_t payload_length_ipv4 = total_packet_len - m_header->m_transport_header_len;
+    if (get_sa_family() == AF_INET6) {
+        fill_hdrs<tx_ipv6_hdr_template_t>(p_pkt, p_ip_hdr, p_tcp_hdr);
+        set_ipv6_len(p_ip_hdr, htons(payload_length_ipv4 - IPV6_HLEN));
+    } else {
+        fill_hdrs<tx_ipv4_hdr_template_t>(p_pkt, p_ip_hdr, p_tcp_hdr);
+        set_ipv4_len(p_ip_hdr, htons(payload_length_ipv4));
+    }
+
+    void *ptr = (void *)((uint8_t *)p->payload - m_header->m_total_hdr_len);
+    ret = m_p_ring->send_doca_buffer(ptr, total_packet_len, user_data);
+
+    return ret;
+}
+
+ssize_t dst_entry_tcp::send_doca_lso(struct pbuf *p, bool is_zerocopy)
+{
+    void *p_ip_hdr;
+    void *p_tcp_hdr;
+    void *p_pkt;
+
+    struct pbuf *payload_pbuf = is_zerocopy ? p->next : p;
+
+    if (unlikely(payload_pbuf->ref > 1)) {
+        // See comment below in dst_entry_tcp::send_doca_single
+        dst_tcp_logwarn(
+            "There is no such list in DOCA implementation. Need to test if this scenario works");
+    }
+    payload_pbuf->ref++;
+
+    p_pkt = (void *)((uint8_t *)p->payload - m_header->m_aligned_l2_l3_len);
+    uint32_t total_packet_len =
+        payload_pbuf->tot_len + m_header->m_total_hdr_len + (is_zerocopy ? p->len : 0);
+    m_header->copy_l2_ip_hdr(p_pkt);
+    uint16_t payload_length_ipv4 = total_packet_len - m_header->m_transport_header_len;
+    if (get_sa_family() == AF_INET6) {
+        fill_hdrs<tx_ipv6_hdr_template_t>(p_pkt, p_ip_hdr, p_tcp_hdr);
+        set_ipv6_len(p_ip_hdr, htons(payload_length_ipv4 - IPV6_HLEN));
+    } else {
+        fill_hdrs<tx_ipv4_hdr_template_t>(p_pkt, p_ip_hdr, p_tcp_hdr);
+        set_ipv4_len(p_ip_hdr, htons(payload_length_ipv4));
+    }
+    size_t tcp_hdr_len = (static_cast<tcphdr *>(p_tcp_hdr))->doff << 2;
+    struct iovec h = {(void *)((uint8_t *)p->payload - m_header->m_total_hdr_len),
+                      m_header->m_total_hdr_len + tcp_hdr_len};
+
+    return m_p_ring->send_doca_lso(h, payload_pbuf, is_zerocopy);
+}
+
 ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_send_attr attr)
 {
     int ret = 0;
@@ -155,6 +254,9 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
             p_send_wqe = &m_inline_send_wqe;
             p_tcp_iov[0].iovec.iov_base = (uint8_t *)p_pkt + hdr_alignment_diff;
             p_tcp_iov[0].iovec.iov_len = total_packet_len;
+            // dst_tcp_loginfo("regular send ptr=%p, len=%u", p_tcp_iov[0].iovec.iov_base,
+            // total_packet_len);
+
         } else if (is_set(attr.flags, (xlio_wr_tx_packet_attr)(XLIO_TX_PACKET_TSO))) {
             /* update send work request. do not expect noninlined scenario */
             send_wqe_h.init_not_inline_wqe(send_wqe, m_sge, sz_iov);
@@ -175,6 +277,8 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
             p_send_wqe = &m_not_inline_send_wqe;
             p_tcp_iov[0].iovec.iov_base = (uint8_t *)p_pkt + hdr_alignment_diff;
             p_tcp_iov[0].iovec.iov_len = total_packet_len;
+            // dst_tcp_loginfo("regular send ptr=%p, len=%u", p_tcp_iov[0].iovec.iov_base,
+            // total_packet_len);
         }
 
         if (unlikely(p_tcp_iov[0].p_desc->lwip_pbuf.ref > 1)) {
@@ -253,17 +357,7 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
             }
         }
 
-        if (!is_zerocopy && sz_iov == 1) {
-            ret = m_p_ring->send_doca_buffer(&p_tcp_iov[0].iovec);
-            if (ret == 0) {
-                dst_tcp_loginfo("DOCA send p=%p, size=%zu", p_tcp_iov[0].iovec.iov_base,
-                                p_tcp_iov[0].iovec.iov_len);
-            }
-        } else {
-            dst_tcp_loginfo("Regular send: p=%p, size=%zu", p_tcp_iov[0].iovec.iov_base,
-                            p_tcp_iov[0].iovec.iov_len);
-            ret = send_lwip_buffer(m_id, p_send_wqe, attr.flags, attr.tis);
-        }
+        ret = send_lwip_buffer(m_id, p_send_wqe, attr.flags, attr.tis);
     } else { // We don'nt support inline in this case, since we believe that this a very rare case
         mem_buf_desc_t *p_mem_buf_desc;
         size_t total_packet_len = 0;
@@ -290,6 +384,7 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
         m_sge[0].length = total_packet_len - hdr_alignment_diff;
         m_sge[0].lkey = m_p_ring->get_tx_lkey(m_id);
 
+        // dst_tcp_loginfo("regular send ptr=%p, len=%u", m_sge[0].addr, m_sge[0].length);
         p_pkt = static_cast<void *>(p_mem_buf_desc->p_buffer);
 
         uint16_t payload_length_ipv4 = m_sge[0].length - m_header->m_transport_header_len;

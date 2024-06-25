@@ -39,6 +39,10 @@
 #include "proto/tls.h"
 #include "util/valgrind.h"
 #include <doca_buf.h>
+#include <doca_log.h>
+#include <thread>
+#include <cinttypes>
+#include <sock/sock-app.h>
 
 #undef MODULE_NAME
 #define MODULE_NAME "hw_queue_tx"
@@ -851,7 +855,9 @@ void hw_queue_tx::store_current_wqe_prop(mem_buf_desc_t *buf, unsigned credits, 
 void hw_queue_tx::send_to_wire(xlio_ibv_send_wr *p_send_wqe, xlio_wr_tx_packet_attr attr,
                                bool request_comp, xlio_tis *tis, unsigned credits)
 {
-    return;
+    if (safe_mce_sys().doca_tx) {
+        hwqtx_logerr("IFTAH - send_to_wire, but we should use doca_tx path!");
+    }
 
     struct xlio_mlx5_wqe_ctrl_seg *ctrl = nullptr;
     struct mlx5_wqe_eth_seg *eseg = nullptr;
@@ -1481,6 +1487,10 @@ void hw_queue_tx::post_dump_wqe(xlio_tis *tis, void *addr, uint32_t len, uint32_
 // So we can post_send anything we want :)
 void hw_queue_tx::trigger_completion_for_all_sent_packets()
 {
+    if (safe_mce_sys().doca_tx) {
+        return;
+    }
+
     hwqtx_logfunc("unsignaled count=%d", m_n_unsignaled_count);
 
     if (!is_signal_requested_for_last_wqe()) {
@@ -1610,23 +1620,53 @@ void hw_queue_tx::destory_doca_pe(doca_pe *pe)
     }
 }
 
-bool hw_queue_tx::prepare_doca_txq()
+bool hw_queue_tx::check_doca_caps(doca_devinfo *devinfo, uint32_t &max_burst_size)
 {
-    doca_dev *dev = m_p_ib_ctx_handler->get_doca_device();
-    doca_devinfo *devinfo = doca_dev_as_devinfo(dev);
+    doca_error_t err = doca_eth_txq_cap_is_type_supported(devinfo, DOCA_ETH_TXQ_TYPE_REGULAR,
+                                                          DOCA_ETH_TXQ_DATA_PATH_TYPE_CPU);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_cap_is_type_supported");
+        return false;
+    }
 
-    doca_error_t type_supported = doca_eth_txq_cap_is_type_supported(
-        devinfo, DOCA_ETH_TXQ_TYPE_REGULAR, DOCA_ETH_TXQ_DATA_PATH_TYPE_CPU);
-
-    uint32_t max_burst_size = 0U;
     // TODO check for the correct 2 values for list size and lso header
-    doca_error_t err = doca_eth_txq_cap_get_max_burst_size(devinfo, 1, 0, &max_burst_size);
-
-    if (DOCA_IS_ERROR(type_supported) || DOCA_IS_ERROR(err)) {
-        PRINT_DOCA_ERR(hwqtx_logerr, type_supported, "doca_eth_txq_cap_is_type_supported");
+    err = doca_eth_txq_cap_get_max_burst_size(devinfo, 32, 64, &max_burst_size);
+    if (DOCA_IS_ERROR(err)) {
         PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_cap_get_max_burst_size");
         return false;
     }
+
+    err = doca_eth_txq_cap_is_l3_chksum_offload_supported(devinfo);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_cap_is_l3_chksum_offload_supported");
+        return false;
+    }
+
+    err = doca_eth_txq_cap_is_l4_chksum_offload_supported(devinfo);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_cap_is_l4_chksum_offload_supported");
+        return false;
+    }
+
+    return true;
+}
+
+bool hw_queue_tx::prepare_doca_txq()
+{
+    doca_error_t err;
+    doca_dev *dev = m_p_ib_ctx_handler->get_doca_device();
+    doca_devinfo *devinfo = doca_dev_as_devinfo(dev);
+    uint32_t max_burst_size = 0U;
+
+    if (!check_doca_caps(devinfo, max_burst_size)) {
+        hwqtx_logerr("TXQ caps failed, Dev:%s", m_p_ib_ctx_handler->get_ibname().c_str());
+        return false;
+    }
+
+    char iface_name[DOCA_DEVINFO_IFACE_NAME_SIZE];
+    doca_devinfo_get_iface_name(devinfo, iface_name, DOCA_DEVINFO_IFACE_NAME_SIZE);
+    hwqtx_loginfo("IF=%s: max_burst_size=%u", iface_name, max_burst_size);
+    // max_burst_size = 8096U;
 
     hwqtx_loginfo("TXQ caps MaxBurstSize %u,Dev:%s", max_burst_size,
                   m_p_ib_ctx_handler->get_ibname().c_str());
@@ -1648,17 +1688,28 @@ bool hw_queue_tx::prepare_doca_txq()
         return false;
     }
 
-    err = doca_eth_txq_set_mss(txq, 1500);
+    err = doca_eth_txq_set_max_send_buf_list_len(txq, 32);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_max_send_buf_list_len");
+        return false;
+    }
+
+    /*  LSO task will take at least 2 wqebbs, and max sq size is 32K.
+        This leaves XLIO with 2x the amount of WQEs that can be populated to HW.
+        The rest 16K tasks can be posted to DOCA SWQ. */
+    init_doca_lso_metadata(32768);
+
+    err = doca_eth_txq_set_mss(txq, 1460);
     if (DOCA_IS_ERROR(err)) {
         PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_mss");
         return false;
     }
 
-    // err = doca_eth_txq_set_max_lso_header_size(txq, 64);
-    // if (DOCA_IS_ERROR(err)) {
-    //     PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_mss");
-    //     return false;
-    // }
+    err = doca_eth_txq_set_max_lso_header_size(txq, 64);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_set_mss");
+        return false;
+    }
 
     m_doca_txq.reset(txq);
     m_doca_ctx_txq = doca_eth_txq_as_doca_ctx(txq);
@@ -1685,6 +1736,21 @@ bool hw_queue_tx::prepare_doca_txq()
     if (DOCA_IS_ERROR(err)) {
         PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_task_send_set_conf txq: %p max-tasks: %u",
                        m_doca_txq.get(), m_txq_burst_size);
+        return false;
+    }
+
+    err = doca_eth_txq_set_max_lso_header_size(m_doca_txq.get(), 64);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "Failed to set max_lso_header_size");
+        return false;
+    }
+
+    err = doca_eth_txq_task_lso_send_set_conf(m_doca_txq.get(), tx_task_lso_completion_cb,
+                                              tx_task_lso_error_cb, max_burst_size);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err,
+                       "doca_eth_txq_task_lso_send_set_conf txq: %p max-tasks: %u",
+                       m_doca_txq.get(), max_burst_size);
         return false;
     }
 
@@ -1718,11 +1784,32 @@ bool hw_queue_tx::prepare_doca_txq()
         return false;
     }
 
-    // err = doca_pe_get_notification_handle(pe, &m_notification_handle);
-    // if (DOCA_IS_ERROR(err)) {
-    //     PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_pe_get_notification_handle");
-    //     return false;
-    // }
+#if defined(DEFINED_NGINX) || defined(DEFINED_ENVOY)
+    // IFTAH - do we need it for TX as well??...
+
+    /*
+     * For some scenario with forking usage we may want to distribute CQs across multiple
+     * CPUs to improve CPS in case of multiple processes.
+     */
+    if (safe_mce_sys().app.distribute_cq_interrupts && g_p_app->get_worker_id() >= 0 &&
+        m_p_ib_ctx_handler->is_notification_affinity_supported()) {
+        uint32_t core = g_p_app->get_worker_id() % std::thread::hardware_concurrency();
+        hwqtx_loginfo("Setting PE core affinity: %" PRIu32 ", pid: %d", core, getpid());
+
+        err = doca_pe_set_notification_affinity(pe, core);
+        if (DOCA_IS_ERROR(err)) {
+            PRINT_DOCA_ERR(hwqtx_logerr, err,
+                           "doca_pe_set_notification_affinity pe/ctx/txq: %p,%p,%p", pe,
+                           m_doca_ctx_txq, m_doca_txq.get());
+        }
+    }
+#endif
+
+    err = doca_pe_get_notification_handle(pe, &m_notification_handle);
+    if (DOCA_IS_ERROR(err)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_pe_get_notification_handle");
+        return false;
+    }
 
     doca_buf_inventory *inventory = nullptr;
     err = doca_buf_inventory_create(m_txq_burst_size, &inventory);
@@ -1739,25 +1826,19 @@ bool hw_queue_tx::prepare_doca_txq()
         return false;
     }
 
-    hwqtx_logdbg("Created DOCA TXQ and PE %p/%p", m_doca_txq.get(), m_doca_pe.get());
+    hwqtx_logdbg("Created DOCA TXQ and PE %p/%p, inventory: tot_elements/alloc = %u/%u",
+                 m_doca_txq.get(), m_doca_pe.get());
     return true;
 }
 
 void hw_queue_tx::tx_task_completion_cb(doca_eth_txq_task_send *task_send, doca_data task_user_data,
                                         doca_data ctx_user_data)
 {
-    // mem_buf_desc_t *mem_buf = reinterpret_cast<mem_buf_desc_t *>(task_user_data.ptr);
+    mem_buf_desc_t *mem_buf = reinterpret_cast<mem_buf_desc_t *>(task_user_data.ptr);
     hw_queue_tx *hw_tx = reinterpret_cast<hw_queue_tx *>(ctx_user_data.ptr);
-    doca_buf *buf = nullptr;
-    doca_error_t rc = doca_eth_txq_task_send_get_pkt(task_send, &buf);
-    if (unlikely(DOCA_IS_ERROR(rc))) {
-        PRINT_DOCA_ERR(__log_err, rc, "doca_eth_txq_task_send_get_pkt");
-        tx_task_error_cb(task_send, task_user_data, ctx_user_data);
-        return;
-    }
 
     hw_tx->return_doca_task(task_send);
-    // hw_tx->handle_completion(mem_buf);
+    hw_tx->handle_completion(mem_buf);
 
     __log_func("tx_task_completion_cb pid: %d\n", (int)getpid());
 }
@@ -1784,9 +1865,47 @@ void hw_queue_tx::tx_task_error_cb(doca_eth_txq_task_send *task_send, doca_data 
     hw_tx->reclaim_tx_buffer(mem_buf);
 }
 
+void hw_queue_tx::tx_task_lso_completion_cb(doca_eth_txq_task_lso_send *lso_task,
+                                            doca_data task_user_data, doca_data ctx_user_data)
+{
+    doca_lso_metadata *lso_metadata = reinterpret_cast<doca_lso_metadata *>(task_user_data.ptr);
+    hw_queue_tx *hw_tx = reinterpret_cast<hw_queue_tx *>(ctx_user_data.ptr);
+
+    hw_tx->return_doca_lso_task(lso_task);
+    hw_tx->handle_completion(lso_metadata->buff);
+    hw_tx->put_lso_metadata(lso_metadata);
+
+    __log_func("tx_task_lso_completion_cb pid: %d\n", (int)getpid());
+}
+
+void hw_queue_tx::tx_task_lso_error_cb(doca_eth_txq_task_lso_send *lso_task,
+                                       doca_data task_user_data, doca_data ctx_user_data)
+{
+    doca_lso_metadata *lso_metadata = reinterpret_cast<doca_lso_metadata *>(task_user_data.ptr);
+    hw_queue_tx *hw_tx = reinterpret_cast<hw_queue_tx *>(ctx_user_data.ptr);
+    doca_ctx_states ctx_state = DOCA_CTX_STATE_STOPPING;
+    doca_error_t rc_state = doca_ctx_get_state(hw_tx->m_doca_ctx_txq, &ctx_state);
+    ctx_state = ((ctx_state != DOCA_CTX_STATE_IDLE) ? ctx_state : DOCA_CTX_STATE_STOPPING);
+    if (rc_state != DOCA_SUCCESS || ctx_state != DOCA_CTX_STATE_STOPPING) {
+        PRINT_DOCA_ERR(__log_err,
+                       doca_task_get_status(doca_eth_txq_task_lso_send_as_doca_task(lso_task)),
+                       "TX Task Error");
+        // TODO DOCA: Add statistics for errors
+    }
+
+    __log_func("tx_task_lso_error_cb, lso_task: %p, rc_state: %d, ctx_state: %d", lso_task,
+               rc_state, ctx_state);
+
+    __log_err("tx_task_lso_error_cb, lso_task: %p, rc_state: %d, ctx_state: %d", lso_task, rc_state,
+              ctx_state);
+    hw_tx->return_doca_lso_task(lso_task);
+    hw_tx->handle_completion(lso_metadata->buff);
+    hw_tx->put_lso_metadata(lso_metadata);
+}
+
 void hw_queue_tx::return_doca_task(doca_eth_txq_task_send *task_send)
 {
-    hwqtx_loginfo("return_doca_task!");
+    // hwqtx_loginfo("return_doca_task!");
     doca_buf *buf = nullptr;
     doca_error_t err = doca_eth_txq_task_send_get_pkt(task_send, &buf);
     if (unlikely(DOCA_IS_ERROR(err))) {
@@ -1799,13 +1918,30 @@ void hw_queue_tx::return_doca_task(doca_eth_txq_task_send *task_send)
     if (--m_inflight < 0) {
         hwqtx_logerr("m_inflight is negative...");
     } else {
-        hwqtx_loginfo("m_inflight=%d", m_inflight);
+        // hwqtx_loginfo("m_inflight=%d", m_inflight);
+    }
+}
+
+void hw_queue_tx::return_doca_lso_task(doca_eth_txq_task_lso_send *lso_task)
+{
+    doca_buf *buf = nullptr;
+    // can do the same for headers using doca_eth_txq_task_lso_send_get_headers
+    doca_error_t err = doca_eth_txq_task_lso_send_get_pkt_payload(lso_task, &buf);
+    if (unlikely(DOCA_IS_ERROR(err))) {
+        PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_eth_txq_task_lso_send_get_pkt_payload");
+    } else {
+        return_doca_buf(buf);
+    }
+
+    doca_task_free(doca_eth_txq_task_lso_send_as_doca_task(lso_task));
+    if (--m_inflight < 0) {
+        hwqtx_logerr("m_inflight is negative...");
     }
 }
 
 void hw_queue_tx::return_doca_buf(doca_buf *buf)
 {
-    hwqtx_loginfo("return_doca_buf!");
+    // hwqtx_loginfo("return_doca_buf!");
     doca_error_t rc_state = doca_buf_dec_refcount(buf, nullptr);
     if (unlikely(rc_state != DOCA_SUCCESS)) {
         PRINT_DOCA_ERR(hwqtx_logerr, rc_state, "doca_buf_dec_refcount");
@@ -1814,7 +1950,7 @@ void hw_queue_tx::return_doca_buf(doca_buf *buf)
 
 void hw_queue_tx::handle_completion(mem_buf_desc_t *mem_buf)
 {
-    hwqtx_loginfo("handle_completion!");
+    // hwqtx_loginfo("handle_completion!");
     m_polled.push_back(mem_buf);
 }
 
@@ -1853,6 +1989,11 @@ void hw_queue_tx::start_doca_txq()
 {
     hwqtx_logdbg("Starting DOCA TXQ: %p pid: %d", m_doca_txq.get(), getpid());
 
+    // IFTAH - enable DOCA logs
+    // struct doca_log_backend *stdout_logger = nullptr;
+    // doca_log_backend_create_with_file_sdk(stdout, &stdout_logger);
+    // doca_log_backend_set_sdk_level(stdout_logger, DOCA_LOG_LEVEL_INFO);
+
     doca_error_t err = doca_ctx_start(m_doca_ctx_txq);
     if (DOCA_IS_ERROR(err)) {
         PRINT_DOCA_ERR(hwqtx_logerr, err, "doca_ctx_start(TXQ). TXQ:%p", m_doca_txq.get());
@@ -1886,26 +2027,40 @@ void hw_queue_tx::stop_doca_txq()
     }
 }
 
-void hw_queue_tx::send_buff(struct iovec *iovec)
+void hw_queue_tx::send_multiple_bufs(tcp_iovec *p_tcp_iov, const ssize_t num_iovs)
 {
     doca_eth_txq_task_send *task = nullptr;
-    doca_buf *tx_doca_buf = nullptr;
-    // doca_error_t rc = doca_buf_inventory_buf_get_by_addr(
-    //     m_doca_inventory.get(), m_doca_mmap, buff->p_buffer, buff->sz_buffer, &tx_doca_buf);
+    doca_buf *first_doca_buf = nullptr;
     doca_error_t rc = doca_buf_inventory_buf_get_by_data(
-        m_doca_inventory.get(), m_doca_mmap, iovec->iov_base, iovec->iov_len, &tx_doca_buf);
+        m_doca_inventory.get(), m_doca_mmap, p_tcp_iov[0].iovec.iov_base,
+        p_tcp_iov[0].iovec.iov_len, &first_doca_buf);
     if (DOCA_IS_ERROR(rc)) {
         PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_buf_inventory_buf_get_by_data");
     }
 
-    rc = doca_eth_txq_task_send_allocate_init(m_doca_txq.get(), tx_doca_buf,
-                                              {.ptr = iovec->iov_base}, &task);
+    doca_buf *prev_doca_buf = first_doca_buf;
+    doca_buf *next_doca_buf = nullptr;
+
+    for (int i = 1; i < num_iovs; i++) {
+        rc = doca_buf_inventory_buf_get_by_data(m_doca_inventory.get(), m_doca_mmap,
+                                                p_tcp_iov[i].iovec.iov_base,
+                                                p_tcp_iov[i].iovec.iov_len, &next_doca_buf);
+        if (DOCA_IS_ERROR(rc)) {
+            PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_buf_inventory_buf_get_by_data");
+        }
+        doca_buf_chain_list(prev_doca_buf, next_doca_buf);
+        prev_doca_buf = next_doca_buf;
+    }
+
+    rc = doca_eth_txq_task_send_allocate_init(
+        m_doca_txq.get(), first_doca_buf,
+        {.ptr = p_tcp_iov[0].p_desc /*TEMP! need to save metadata until task finishes*/}, &task);
     if (DOCA_IS_ERROR(rc)) {
-        return_doca_buf(tx_doca_buf);
+        return_doca_buf(first_doca_buf);
         PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_send_allocate_init");
     }
 
-    hwqtx_loginfo("send_buff: p=%p, size=%zu", iovec->iov_base, iovec->iov_len);
+    // hwqtx_loginfo("send_buff: p=%p, size=%zu, buff=%p", iovec->iov_base, iovec->iov_len, buff);
     ++m_inflight;
     rc = doca_task_submit(doca_eth_txq_task_send_as_doca_task(task));
     if (DOCA_IS_ERROR(rc)) {
@@ -1914,8 +2069,220 @@ void hw_queue_tx::send_buff(struct iovec *iovec)
     }
 }
 
-void hw_queue_tx::poll_all_completions() {
-    while (m_inflight > 0) {
-		doca_pe_progress(m_doca_pe.get());
-	}
+int hw_queue_tx::send_pbuf(void *ptr, uint32_t len, mem_buf_desc_t *buff)
+{
+    doca_eth_txq_task_send *task = nullptr;
+    doca_buf *tx_doca_buf = nullptr;
+
+get_buf:
+    doca_error_t rc = doca_buf_inventory_buf_get_by_data(m_doca_inventory.get(), m_doca_mmap, ptr,
+                                                         len, &tx_doca_buf);
+    if (DOCA_IS_ERROR(rc)) {
+        PRINT_DOCA_ERR(hwqtx_loginfo, rc,
+                       "doca_buf_inventory_buf_get_by_data, trying to expand by 2048");
+        if (DOCA_ERROR_NO_MEMORY == rc) {
+            rc = doca_buf_inventory_expand(m_doca_inventory.get(), 2048);
+            if (DOCA_IS_ERROR(rc)) {
+                PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_buf_inventory_expand");
+                return 0;
+            }
+            goto get_buf;
+        }
+    }
+
+get_task:
+    rc = doca_eth_txq_task_send_allocate_init(m_doca_txq.get(), tx_doca_buf, {.ptr = buff}, &task);
+    if (DOCA_IS_ERROR(rc)) {
+        PRINT_DOCA_ERR(
+            hwqtx_loginfo, rc,
+            "doca_eth_txq_task_send_allocate_init, trying to expand by 2048. m_inflight=%d",
+            m_inflight);
+        if (DOCA_ERROR_NO_MEMORY == rc) {
+            rc = doca_eth_txq_task_send_num_expand(m_doca_txq.get(), 2048);
+            if (DOCA_IS_ERROR(rc)) {
+                PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_send_num_expand");
+                return_doca_buf(tx_doca_buf);
+                return 0;
+            }
+            goto get_task;
+        }
+    }
+
+    ++m_inflight;
+    rc = doca_task_submit(doca_eth_txq_task_send_as_doca_task(task));
+    if (DOCA_IS_ERROR(rc)) {
+        return_doca_task(task);
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_send_as_doca_task");
+    }
+    return (DOCA_IS_ERROR(rc) ? 0 : len);
+}
+
+void hw_queue_tx::send_buff(struct iovec *iovec, doca_mmap *mmap, mem_buf_desc_t *buff)
+{
+    doca_eth_txq_task_send *task = nullptr;
+    doca_buf *tx_doca_buf = nullptr;
+    doca_error_t rc = doca_buf_inventory_buf_get_by_data(
+        m_doca_inventory.get(), mmap ?: m_doca_mmap, iovec->iov_base, iovec->iov_len, &tx_doca_buf);
+    if (DOCA_IS_ERROR(rc)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_buf_inventory_buf_get_by_data");
+    }
+
+    rc = doca_eth_txq_task_send_allocate_init(m_doca_txq.get(), tx_doca_buf, {.ptr = buff}, &task);
+    if (DOCA_IS_ERROR(rc)) {
+        return_doca_buf(tx_doca_buf);
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_send_allocate_init");
+    }
+
+    hwqtx_loginfo("send_buff: p=%p, size=%zu, buff=%p", iovec->iov_base, iovec->iov_len, buff);
+    ++m_inflight;
+    rc = doca_task_submit(doca_eth_txq_task_send_as_doca_task(task));
+    if (DOCA_IS_ERROR(rc)) {
+        return_doca_task(task);
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_send_as_doca_task");
+    }
+}
+
+ssize_t hw_queue_tx::send_lso(struct iovec &h, struct pbuf *p, bool is_zerocopy)
+{
+    struct doca_eth_txq_task_lso_send *task = nullptr;
+    doca_buf *tx_doca_buf = nullptr;
+
+    struct doca_mmap *mmap = (PBUF_DESC_MDESC == p->desc.attr)
+        ? reinterpret_cast<mapping_t *>(p->desc.mdesc)->get_mmap()
+        : m_doca_mmap;
+
+    void *first_pkt = (uint8_t *)p->payload + (is_zerocopy ? 0 : TCP_HLEN);
+    uint32_t first_pkt_len = p->len - (is_zerocopy ? 0 : TCP_HLEN);
+    doca_error_t rc = doca_buf_inventory_buf_get_by_data(m_doca_inventory.get(), mmap, first_pkt,
+                                                         first_pkt_len, &tx_doca_buf);
+    if (DOCA_IS_ERROR(rc)) {
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_buf_inventory_buf_get_by_data");
+        return -1;
+    }
+
+    // uint32_t first_tot_payload = p->tot_len;
+
+    uint32_t tot_payload = p->len + h.iov_len;
+    doca_lso_metadata *lso_metadata = get_lso_metadata();
+    lso_metadata->headers.addr = h.iov_base;
+    lso_metadata->headers.len = h.iov_len;
+    lso_metadata->headers.next = nullptr;
+    lso_metadata->buff = reinterpret_cast<mem_buf_desc_t *>(p);
+    p = p->next;
+
+    doca_buf *prev_doca_buf = tx_doca_buf;
+    doca_buf *next_doca_buf = nullptr;
+    for (; p; p = p->next) {
+        tot_payload += p->len;
+        mmap = (PBUF_DESC_MDESC == p->desc.attr)
+            ? reinterpret_cast<mapping_t *>(p->desc.mdesc)->get_mmap()
+            : m_doca_mmap;
+        rc = doca_buf_inventory_buf_get_by_data(m_doca_inventory.get(), mmap, p->payload, p->len,
+                                                &next_doca_buf);
+        if (DOCA_IS_ERROR(rc)) {
+            PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_buf_inventory_buf_get_by_data");
+            return_doca_buf(tx_doca_buf);
+            return -1;
+        }
+        doca_buf_chain_list(prev_doca_buf, next_doca_buf);
+        prev_doca_buf = next_doca_buf;
+    }
+
+    rc = doca_eth_txq_task_lso_send_allocate_init(
+        m_doca_txq.get(), tx_doca_buf, &lso_metadata->headers, {.ptr = lso_metadata}, &task);
+    if (DOCA_IS_ERROR(rc)) {
+        return_doca_buf(tx_doca_buf);
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_eth_txq_task_lso_send_allocate_init");
+    }
+
+    ++m_inflight;
+    rc = doca_task_submit(doca_eth_txq_task_lso_send_as_doca_task(task));
+    if (DOCA_IS_ERROR(rc)) {
+        return_doca_lso_task(task);
+        PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_task_submit");
+    }
+
+    // what to return here? only payload? all data? maybe bool?
+    return tot_payload;
+}
+
+bool hw_queue_tx::poll_all_completions()
+{
+    // if (!m_inflight)
+    //     return false;
+
+    // DOCA forbides calling doca_pe_progress on armed PE.
+    // if (unlikely(m_notification_armed)) {
+    //     hwqtx_logwarn("Poll attempt on armed PE. hw_queue_tx: %p", this);
+    //     return false;
+    // }
+
+    uint32_t ret = 0U;
+    while (doca_pe_progress(m_doca_pe.get())) {
+        ++ret;
+    }
+
+    while (m_polled.size()) {
+        reclaim_tx_buffer(m_polled.get_and_pop_front());
+    }
+
+    return (ret > 0U);
+}
+
+void hw_queue_tx::init_doca_lso_metadata(int size)
+{
+    doca_lso_metadata_head = new doca_lso_metadata[size];
+    for (int i = 0; i < size - 1; ++i) {
+        doca_lso_metadata_head[i].next = &doca_lso_metadata_head[i + 1];
+    }
+    doca_lso_metadata_head[size - 1].headers.next = nullptr;
+}
+
+doca_lso_metadata *hw_queue_tx::get_lso_metadata()
+{
+    doca_lso_metadata *ret = nullptr;
+    if (doca_lso_metadata_head) {
+        ret = doca_lso_metadata_head;
+        doca_lso_metadata_head = doca_lso_metadata_head->next;
+    }
+    return ret;
+}
+
+void hw_queue_tx::put_lso_metadata(doca_lso_metadata *lso_metadata)
+{
+    lso_metadata->next = doca_lso_metadata_head;
+    doca_lso_metadata_head = lso_metadata;
+}
+
+bool hw_queue_tx::request_notification()
+{
+    // int polled = 0;
+    // while (doca_pe_progress(m_doca_pe.get())) {
+    //     ++polled;
+    // }
+
+    if (likely(!m_notification_armed)) {
+        doca_error_t rc = doca_pe_request_notification(m_doca_pe.get());
+        if (unlikely(DOCA_IS_ERROR(rc))) {
+            PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_pe_request_notification");
+            return false;
+        }
+    }
+
+    hwqtx_logfunc("Requested notification hw_queue_tx: %p", this);
+    m_notification_armed = true;
+    return true;
+}
+
+void hw_queue_tx::clear_notification()
+{
+    if (m_notification_armed) {
+        m_notification_armed = false;
+        doca_error_t rc = doca_pe_clear_notification(m_doca_pe.get(), m_notification_handle);
+        if (unlikely(DOCA_IS_ERROR(rc))) {
+            PRINT_DOCA_ERR(hwqtx_logerr, rc, "doca_pe_clear_notification");
+        }
+    } else {
+        hwqtx_logwarn("Clear notification attempt on unarmed PE. hw_queue_tx: %p", this);
+    }
 }

@@ -35,19 +35,14 @@
 
 #include "core/proto/dst_entry.h"
 
-/* Structure for TCP scatter/gather I/O.  */
-typedef struct tcp_iovec {
-    struct iovec iovec;
-    mem_buf_desc_t *p_desc;
-    void *tcphdr;
-} tcp_iovec;
-
 class dst_entry_tcp : public dst_entry {
 public:
     dst_entry_tcp(const sock_addr &dst, uint16_t src_port, socket_data &data,
                   resource_allocation_key &ring_alloc_logic);
     virtual ~dst_entry_tcp();
 
+    ssize_t send_doca_single(struct pbuf *p);
+    ssize_t send_doca_lso(struct pbuf *p, bool is_zerocopy);
     ssize_t fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_send_attr attr);
     ssize_t slow_send(const iovec *p_iov, const ssize_t sz_iov, xlio_send_attr attr,
                       struct xlio_rate_limit_t &rate_limit, int flags = 0, sockinfo *sock = nullptr,

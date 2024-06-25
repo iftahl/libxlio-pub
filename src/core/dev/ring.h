@@ -92,11 +92,36 @@ public:
                                   xlio_wr_tx_packet_attr attr) = 0;
     virtual int send_lwip_buffer(ring_user_id_t id, xlio_ibv_send_wr *p_send_wqe,
                                  xlio_wr_tx_packet_attr attr, xlio_tis *tis) = 0;
-    virtual int send_doca_buffer(struct iovec *iovec)
+    virtual int send_doca_buffer(void *ptr, uint32_t len, mem_buf_desc_t *buff)
+    {
+        NOT_IN_USE(ptr);
+        NOT_IN_USE(len);
+        NOT_IN_USE(buff);
+        return -1;
+    }
+
+    virtual int send_doca_buffer(struct iovec *iovec, doca_mmap *mmap, mem_buf_desc_t *buff)
     {
         NOT_IN_USE(iovec);
+        NOT_IN_USE(mmap);
+        NOT_IN_USE(buff);
         return -1;
     };
+
+    virtual int send_doca_buffer(tcp_iovec *p_tcp_iov, const ssize_t num_iovs)
+    {
+        NOT_IN_USE(p_tcp_iov);
+        NOT_IN_USE(num_iovs);
+        return -1;
+    };
+
+    virtual ssize_t send_doca_lso(struct iovec &h, struct pbuf *p, bool is_zerocopy)
+    {
+        NOT_IN_USE(h);
+        NOT_IN_USE(p);
+        NOT_IN_USE(is_zerocopy);
+        return -1;
+    }
 
     virtual int get_num_resources() const = 0;
     virtual int *get_rx_channel_fds(size_t &length) const

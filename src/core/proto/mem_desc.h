@@ -39,6 +39,13 @@
 
 #include "utils/lock_wrapper.h"
 
+/* Structure for TCP scatter/gather I/O.  */
+typedef struct tcp_iovec {
+    struct iovec iovec;
+    mem_buf_desc_t *p_desc;
+    void *tcphdr;
+} tcp_iovec;
+
 /*
  * Note, the following mem_desc implementations must be allocated with new()
  * (not by new[], nor by placement new, nor a local object on the stack,

@@ -669,6 +669,8 @@ err_t tcp_write(struct tcp_pcb *pcb, const void *arg, u32_t len, u16_t apiflags,
     }
     pcb->last_unsent = seg;
 
+    // printf("IFTAH - tcp_write: new seg len=%u\n", seg->p->tot_len);
+
     /*
      * Finally update the pcb state.
      */

@@ -79,6 +79,15 @@ struct sq_wqe_prop {
     struct sq_wqe_prop *next;
 };
 
+/* DOCA LSO user data */
+struct doca_lso_metadata {
+    struct doca_gather_list headers;
+    union {
+        mem_buf_desc_t *buff;
+        doca_lso_metadata *next;
+    };
+};
+
 // @class hw_queue_tx
 // Object to manages the SQ operations. This object is used for Tx.
 // Once created it requests from the system a CQ to work with.
@@ -115,14 +124,12 @@ public:
 
 #ifdef DEFINED_UTLS
     xlio_tis *tls_context_setup_tx(const xlio_tls_info *info);
-    xlio_tir *tls_create_tir(bool cached);
     int tls_context_setup_rx(xlio_tir *tir, const xlio_tls_info *info, uint32_t next_record_tcp_sn,
                              xlio_comp_cb_t callback, void *callback_arg);
     void tls_context_resync_tx(const xlio_tls_info *info, xlio_tis *tis, bool skip_static);
     void tls_resync_rx(xlio_tir *tir, const xlio_tls_info *info, uint32_t hw_resync_tcp_sn);
     void tls_get_progress_params_rx(xlio_tir *tir, void *buf, uint32_t lkey);
     void tls_release_tis(xlio_tis *tis);
-    void tls_release_tir(xlio_tir *tir);
     void tls_tx_post_dump_wqe(xlio_tis *tis, void *addr, uint32_t len, uint32_t lkey, bool first);
 #endif /* DEFINED_UTLS */
 
@@ -155,10 +162,15 @@ public:
 
     void reset_inflight_zc_buffers_ctx(void *ctx);
 
-    void credits_return(unsigned credits) { m_sq_free_credits += credits; }
+    void credits_return(unsigned credits)
+    {
+        return;
+        m_sq_free_credits += credits;
+    }
 
     bool credits_get(unsigned credits)
     {
+        return true;
         if (m_sq_free_credits >= credits) {
             m_sq_free_credits -= credits;
             return true;
@@ -168,6 +180,7 @@ public:
 
     unsigned credits_calculate(xlio_ibv_send_wr *p_send_wqe)
     {
+        return 0;
         /* Credit is a logical value which is opaque for users. Only hw_queue_tx can interpret the
          * value and currently, one credit equals to one WQEBB in the SQ.
          *
@@ -210,8 +223,14 @@ public:
     {
         return m_notification_handle;
     }
-    void send_buff(struct iovec *iovec);
-    void poll_all_completions();
+    void send_buff(struct iovec *iovec, doca_mmap *mmap, mem_buf_desc_t *buff);
+    ssize_t send_lso(struct iovec &h, struct pbuf *p, bool is_zerocopy);
+    bool poll_all_completions();
+    void send_multiple_bufs(struct tcp_iovec *p_tcp_iov, const ssize_t num_iovs);
+    int send_pbuf(void *ptr, uint32_t len, mem_buf_desc_t *buff);
+    void put_lso_metadata(doca_lso_metadata *lso_metadata);
+    bool request_notification();
+    void clear_notification();
 
 private:
     cq_mgr_tx *init_tx_cq_mgr();
@@ -307,6 +326,8 @@ private:
     // TIS cache. Protected by ring tx lock. TODO Move to ring.
     std::vector<xlio_tis *> m_tls_tis_cache;
 
+    doca_lso_metadata *doca_lso_metadata_head;
+
 #if defined(DEFINED_UTLS)
     std::list<std::unique_ptr<dpcp::tls_dek>> m_tls_dek_get_cache;
     std::list<std::unique_ptr<dpcp::tls_dek>> m_tls_dek_put_cache;
@@ -336,14 +357,22 @@ private:
                                       doca_data ctx_user_data);
     static void tx_task_error_cb(doca_eth_txq_task_send *task_send, doca_data task_user_data,
                                  doca_data ctx_user_data);
-
+    static void tx_task_lso_completion_cb(doca_eth_txq_task_lso_send *task_send,
+                                          doca_data task_user_data, doca_data ctx_user_data);
+    static void tx_task_lso_error_cb(doca_eth_txq_task_lso_send *task_send,
+                                     doca_data task_user_data, doca_data ctx_user_data);
     void return_doca_task(doca_eth_txq_task_send *task_send);
+    void return_doca_lso_task(doca_eth_txq_task_lso_send *lso_task);
     void return_doca_buf(doca_buf *buf);
 
     doca_notification_handle_t m_notification_handle;
+    bool m_notification_armed = false;
     void handle_completion(mem_buf_desc_t *mem_buf);
     void start_doca_txq();
     void stop_doca_txq();
+    bool check_doca_caps(doca_devinfo *devinfo, uint32_t &max_burst_size);
+    void init_doca_lso_metadata(int size);
+    doca_lso_metadata *get_lso_metadata();
 };
 
 #endif // HW_QUEUE_TX_H

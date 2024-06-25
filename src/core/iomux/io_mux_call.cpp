@@ -418,6 +418,10 @@ void io_mux_call::blocking_loops()
             __log_func("going to sleep (elapsed time: %d sec, %d usec)", m_elapsed.tv_sec,
                        m_elapsed.tv_usec);
 
+            if (check_all_offloaded_sockets()) {
+                continue;
+            }
+
             cq_ready = wait(m_elapsed);
             __log_func("wait() returned %d, m_n_all_ready_fds=%d", cq_ready, m_n_all_ready_fds);
             if (cq_ready) {

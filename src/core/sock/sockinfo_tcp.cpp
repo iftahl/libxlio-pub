@@ -336,7 +336,8 @@ sockinfo_tcp::sockinfo_tcp(int fd, int domain)
 
     si_tcp_logdbg("new pcb %p pcb state %d", &m_pcb, get_tcp_state(&m_pcb));
     tcp_arg(&m_pcb, this);
-    tcp_ip_output(&m_pcb, sockinfo_tcp::ip_output);
+    tcp_ip_output(&m_pcb,
+                  safe_mce_sys().doca_tx ? sockinfo_tcp::ip_output_doca : sockinfo_tcp::ip_output);
     tcp_recv(&m_pcb, sockinfo_tcp::rx_lwip_cb);
     tcp_err(&m_pcb, sockinfo_tcp::err_lwip_cb);
     tcp_sent(&m_pcb, sockinfo_tcp::ack_recvd_lwip_cb);
@@ -1064,6 +1065,7 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
         (tx_arg.priv.attr == PBUF_DESC_MKEY ? (struct xlio_pd_key *)tx_arg.priv.opaque : nullptr);
 
     si_tcp_logfunc("tx: iov=%p niovs=%zu", p_iov, sz_iov);
+    // si_tcp_loginfo("tx: iov=%p niovs=%zu", p_iov, sz_iov);
 
     size_t total_iov_len =
         std::accumulate(&p_iov[0], &p_iov[sz_iov], 0U,
@@ -1202,6 +1204,7 @@ ssize_t sockinfo_tcp::tcp_tx_slow_path(xlio_tx_call_attr_t &tx_arg)
     bool block_this_run = BLOCK_THIS_RUN(m_b_blocking, flags);
     for (size_t i = 0; i < sz_iov; i++) {
         si_tcp_logfunc("iov:%d base=%p len=%d", i, p_iov[i].iov_base, p_iov[i].iov_len);
+        // si_tcp_loginfo("iov:%d base=%p len=%d", i, p_iov[i].iov_base, p_iov[i].iov_len);
         if (unlikely(!p_iov[i].iov_base)) {
             continue;
         }
@@ -1321,6 +1324,38 @@ ssize_t sockinfo_tcp::tcp_tx_slow_path(xlio_tx_call_attr_t &tx_arg)
     return tcp_tx_handle_done_and_unlock(total_tx, errno_tmp, is_dummy, is_send_zerocopy);
 }
 
+err_t sockinfo_tcp::ip_output_doca(struct pbuf *p, struct tcp_seg *seg, void *v_p_conn,
+                                   uint16_t flags)
+{
+    NOT_IN_USE(seg);
+    bool is_zerocopy = !!(flags & XLIO_TX_PACKET_ZEROCOPY);
+    bool is_tso = !!(flags & XLIO_TX_PACKET_TSO);
+    uint16_t not_supported_yet = 0; // (flags & XLIO_TX_PACKET_REXMIT);
+    ssize_t ret = ERR_OK;
+    sockinfo_tcp *p_si_tcp = reinterpret_cast<sockinfo_tcp *>(
+        reinterpret_cast<struct tcp_pcb *>(v_p_conn)->my_container);
+    dst_entry_tcp *p_dst = reinterpret_cast<dst_entry_tcp *>(p_si_tcp->m_p_connected_dst_entry);
+
+    // printf("IFTAH - Trying to send %u bytes... flags=0x%x, dst valid=%d, zc=%d, tso=%d\n",
+    // is_zerocopy ? (p->len + p->next->tot_len) : p->tot_len, flags, p_dst->is_valid(),
+    // is_zerocopy, is_tso);
+
+    if (unlikely(!p_dst->is_valid() || (flags & not_supported_yet))) {
+        // TODO: implement rexmit flow. Why not as regular flow??
+        printf("IFTAH - why we are here? flags=0x%x, dst valid=%d\n", flags, p_dst->is_valid());
+        return ip_output(p, seg, v_p_conn, flags);
+    }
+
+    if (is_tso || is_zerocopy) {
+        ret = p_dst->send_doca_lso(p, is_zerocopy);
+        return (ret >= 0 ? ERR_OK : ERR_WOULDBLOCK);
+    }
+
+    ret = p_dst->send_doca_single(p);
+
+    return (ret >= 0 ? ERR_OK : ERR_WOULDBLOCK);
+}
+
 /*
  * TODO Remove 'p' from the interface and use 'seg'.
  * There are multiple places where ip_output() is used without allocating
@@ -1367,9 +1402,11 @@ err_t sockinfo_tcp::ip_output(struct pbuf *p, struct tcp_seg *seg, void *v_p_con
 zc_fill_iov:
     /* For zerocopy, 1st pbuf contains pointer to TCP header */
     assert(p->type == PBUF_STACK);
+    // vlog_printf(VLOG_ERROR, "IFTAH - first p tot_len=%u\n", p->tot_len);
     lwip_iovec[0].tcphdr = p->payload;
     attr.length += p->len;
     p = p->next;
+    // vlog_printf(VLOG_ERROR, "IFTAH - second p tot_len=%u\n", p->tot_len);
     lwip_iovec[0].iovec.iov_base = p->payload;
     lwip_iovec[0].iovec.iov_len = p->len;
     lwip_iovec[0].p_desc = (mem_buf_desc_t *)p;
@@ -1397,6 +1434,7 @@ zc_fill_iov:
         p = p->next;
     }
     count++;
+    // vlog_printf(VLOG_ERROR, "IFTAH - total len=%u\n", attr.length);
 
 send_iov:
     /* Sanity check */
@@ -3138,7 +3176,8 @@ err_t sockinfo_tcp::accept_lwip_cb(void *arg, struct tcp_pcb *child_pcb, err_t e
         return ERR_RST;
     }
 
-    tcp_ip_output(&(new_sock->m_pcb), sockinfo_tcp::ip_output);
+    tcp_ip_output(&(new_sock->m_pcb),
+                  safe_mce_sys().doca_tx ? sockinfo_tcp::ip_output_doca : sockinfo_tcp::ip_output);
     tcp_arg(&(new_sock->m_pcb), new_sock);
     tcp_recv(&new_sock->m_pcb, sockinfo_tcp::rx_lwip_cb);
     tcp_err(&(new_sock->m_pcb), sockinfo_tcp::err_lwip_cb);

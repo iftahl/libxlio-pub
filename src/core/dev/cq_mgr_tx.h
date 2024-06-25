@@ -66,7 +66,7 @@ public:
 
     int poll_and_process_element_tx(uint64_t *p_cq_poll_sn);
 
-    void reset_notification_armed() { m_b_notification_armed = false; }
+    void reset_notification_armed();
 
 private:
     void log_cqe_error(struct xlio_mlx5_cqe *cqe);
