@@ -243,7 +243,7 @@ protected:
     virtual bool ring_request_notification();
     virtual void ring_clear_rx_notification();
 
-    virtual bool handle_os_countdown(int &poll_os_countdown);
+    bool handle_os_countdown(int &poll_os_countdown);
 
     /// Pointer to an array of all offloaded fd's
     int *m_p_all_offloaded_fds;

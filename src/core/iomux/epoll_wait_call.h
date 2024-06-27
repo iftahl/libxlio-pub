@@ -91,9 +91,6 @@ public:
     virtual void unlock();
 
     /// @override
-    virtual bool immidiate_return(int &poll_os_countdown);
-
-    /// @override
     virtual bool check_all_offloaded_sockets();
 
     void init_offloaded_fds();
@@ -107,8 +104,6 @@ protected:
 
     virtual bool ring_request_notification();
     virtual void ring_clear_rx_notification();
-
-    virtual bool handle_os_countdown(int &poll_os_countdown);
 
 private:
     bool _wait(int timeout);
