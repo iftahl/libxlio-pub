@@ -602,9 +602,6 @@ extern mce_sys_var &safe_mce_sys();
 #define SYS_VAR_RX_NUM_POLLS_INIT       "XLIO_RX_POLL_INIT"
 #define SYS_VAR_RX_UDP_POLL_OS_RATIO    "XLIO_RX_UDP_POLL_OS_RATIO"
 #define SYS_VAR_HW_TS_CONVERSION_MODE   "XLIO_HW_TS_CONVERSION"
-// The following 2 params were replaced by XLIO_RX_UDP_POLL_OS_RATIO
-#define SYS_VAR_RX_POLL_OS_RATIO              "XLIO_RX_POLL_OS_RATIO"
-#define SYS_VAR_RX_SKIP_OS                    "XLIO_RX_SKIP_OS"
 #define SYS_VAR_RX_POLL_YIELD                 "XLIO_RX_POLL_YIELD"
 #define SYS_VAR_RX_BYTE_MIN_LIMIT             "XLIO_RX_BYTES_MIN"
 #define SYS_VAR_RX_PREFETCH_BYTES             "XLIO_RX_PREFETCH_BYTES"
