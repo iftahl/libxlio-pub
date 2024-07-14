@@ -257,8 +257,7 @@ bool hw_queue_rx::submit_rxq_task()
         return false;
     }
 
-    rc = doca_eth_rxq_task_recv_allocate_init(m_doca_rxq.get(), {.ptr = buff},
-                                              rx_doca_buf, &rx_doca_task);
+    rc = doca_eth_rxq_task_recv_allocate_init(m_doca_rxq.get(), rx_doca_buf, {.ptr = buff}, &rx_doca_task);
     if (DOCA_IS_ERROR(rc)) {
         return_doca_buf(rx_doca_buf);
         PRINT_DOCA_ERR(hwqrx_logerr, rc, "doca_eth_rxq_task_recv_allocate_init");
