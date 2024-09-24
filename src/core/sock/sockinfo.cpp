@@ -97,6 +97,16 @@ const char *sockinfo::setsockopt_so_opt_to_str(int opt)
     return "UNKNOWN SO opt";
 }
 
+#include <stack>
+class TS_stack {
+
+public:
+    std::stack<int> m_stack;
+    lock_spin_recursive m_lock;
+};
+
+class TS_stack g_stack;
+
 sockinfo::sockinfo(int fd, int domain, bool use_ring_locks)
     : m_skip_cq_poll_in_rx(safe_mce_sys().skip_poll_in_rx == SKIP_POLL_IN_RX_ENABLE)
     , m_fd_context((void *)((uintptr_t)fd))
@@ -114,7 +124,15 @@ sockinfo::sockinfo(int fd, int domain, bool use_ring_locks)
                              ? safe_mce_sys().sysctl_reader.get_net_ipv4_ttl()
                              : safe_mce_sys().sysctl_reader.get_net_ipv6_hop_limit())
 {
-    m_rx_epfd = SYSCALL(epoll_create, 128);
+    g_stack.m_lock.lock();
+    if (g_stack.m_stack.size()) {
+        m_rx_epfd = g_stack.m_stack.top();
+        g_stack.m_stack.pop();
+        g_stack.m_lock.unlock();
+    } else {
+        g_stack.m_lock.unlock();
+        m_rx_epfd = SYSCALL(epoll_create, 128);
+    }
     if (unlikely(m_rx_epfd == -1)) {
         throw_xlio_exception("create internal epoll");
     }
@@ -150,7 +168,12 @@ sockinfo::~sockinfo()
     // Change to non-blocking socket so calling threads can exit
     m_b_blocking = false;
     // This will wake up any blocked thread in rx() call to SYSCALL(epoll_wait, )
-    SYSCALL(close, m_rx_epfd);
+
+    g_stack.m_lock.lock();
+    g_stack.m_stack.push(m_rx_epfd);
+    g_stack.m_lock.unlock();
+
+    //    SYSCALL(close, m_rx_epfd);
 
     while (!m_error_queue.empty()) {
         mem_buf_desc_t *buff = m_error_queue.get_and_pop_front();
