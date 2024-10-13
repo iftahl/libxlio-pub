@@ -485,6 +485,7 @@ public:
     hyper_t hypervisor;
     bool trigger_dummy_send_getsockname;
     bool cps_wa_bind_dedicated_ip;
+    bool l4_zc;
 #if defined(DEFINED_NGINX)
     int nginx_udp_socket_pool_size;
     int nginx_udp_socket_pool_rx_num_buffs_reuse;
@@ -602,6 +603,7 @@ extern mce_sys_var &safe_mce_sys();
 #define SYS_VAR_TX_SEGS_RING_BATCH_TCP        "XLIO_TX_SEGS_RING_BATCH_TCP"
 #define SYS_VAR_TX_SEGS_POOL_BATCH_TCP        "XLIO_TX_SEGS_POOL_BATCH_TCP"
 #define SYS_VAR_CPS_WA_BIND_DEDICATED_IP      "XLIO_CPS_WA_BIND_DEDICATED_IP"
+#define SYS_VAR_L4_ZC                         "XLIO_L4_ZC"
 
 #define SYS_VAR_SELECT_CPU_USAGE_STATS "XLIO_CPU_USAGE_STATS"
 #define SYS_VAR_SELECT_NUM_POLLS       "XLIO_SELECT_POLL"
@@ -804,6 +806,7 @@ extern mce_sys_var &safe_mce_sys();
 #define MCE_DEFAULT_CLOSE_ON_DUP2                  (true)
 #define MCE_DEFAULT_MTU                            (0)
 #define MCE_DEFAULT_CPS_WA_BIND_DEDICATED_IP       (false)
+#define MCE_DEFAULT_L4_ZC                          (false)
 #if defined(DEFINED_NGINX)
 #define MCE_DEFAULT_NGINX_UDP_POOL_SIZE               (0)
 #define MCE_DEFAULT_NGINX_UDP_POOL_RX_NUM_BUFFS_REUSE (0)

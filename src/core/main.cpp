@@ -811,6 +811,8 @@ void print_xlio_global_settings()
         MCE_DEFAULT_NGINX_UDP_POOL_RX_NUM_BUFFS_REUSE, SYS_VAR_NGINX_UDP_POOL_RX_NUM_BUFFS_REUSE);
     VLOG_PARAM_NUMBER("Use dedicated IP per Nginx worker", safe_mce_sys().cps_wa_bind_dedicated_ip,
                       MCE_DEFAULT_CPS_WA_BIND_DEDICATED_IP, SYS_VAR_CPS_WA_BIND_DEDICATED_IP);
+    VLOG_PARAM_NUMBER("Use L4 ZC Nginx worker", safe_mce_sys().l4_zc, MCE_DEFAULT_L4_ZC,
+                      SYS_VAR_L4_ZC);
 #endif
 #if defined(DEFINED_ENVOY)
     VLOG_PARAM_NUMBER("Number of Envoy workers",

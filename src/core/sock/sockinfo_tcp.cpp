@@ -228,6 +228,10 @@ inline void sockinfo_tcp::return_pending_tx_buffs()
 
 inline void sockinfo_tcp::reuse_buffer(mem_buf_desc_t *buff)
 {
+    if (buff->m_is_moved_to_zc_tx) {
+        si_tcp_logerr("IFTAH - reuse_buffer %p, sleep for 20s", (void *)buff);
+        sleep(20);
+    }
     /* Special case when ZC buffers are used in RX path. */
     if (buff->lwip_pbuf.type == PBUF_ZEROCOPY) {
         dst_entry_tcp *p_dst = (dst_entry_tcp *)(m_p_connected_dst_entry);
@@ -590,6 +594,10 @@ sockinfo_tcp::~sockinfo_tcp()
             (int)m_rx_ring_map.size(), m_rx_reuse_buff.n_buff_num, m_rx_reuse_buff.rx_reuse.size(),
             m_rx_cb_dropped_list.size(), m_rx_ctl_packets_list.size(), m_rx_peer_packets.size(),
             m_rx_ctl_reuse_list.size());
+    }
+
+    if (m_rx_pkt_ready_list_to_zc_send.size()) {
+        si_tcp_logerr("IFTAH - %d packets left to send", m_rx_pkt_ready_list_to_zc_send.size());
     }
 
     if (g_p_agent) {
@@ -1074,6 +1082,49 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
     bool is_dummy = IS_DUMMY_PACKET(flags);
     bool is_blocking = BLOCK_THIS_RUN(m_b_blocking, flags);
     bool is_packet_zerocopy = (flags & MSG_ZEROCOPY) && ((m_b_zc) || (tx_arg.opcode == TX_FILE));
+
+    size_t total_iov_len =
+        std::accumulate(&p_iov[0], &p_iov[sz_iov], 0U,
+                        [](size_t sum, const iovec &curr) { return sum + curr.iov_len; });
+    iovec piov[64];
+    mem_buf_desc_t *mem_buf_arr[64];
+    if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend) {
+        size_t num_pkts = m_rx_pkt_ready_list_to_zc_send.size();
+        if (num_pkts > 63) {
+            si_tcp_logerr("num_pkts=%zu, more than 63. need to increase max iov array size!",
+                          num_pkts);
+            sleep(1);
+        }
+
+        if (!num_pkts) {
+            // We don't have something to send now.
+            // Maybe we sent more zc data than requested last time.
+            // si_tcp_logwarn("Don't have ZC proxy data.\nniovs=%zu, total_iov_len=%zu", sz_iov,
+            //                total_iov_len);
+
+            // Do we want to ignore this Tx and return total_iov_len?
+            return total_iov_len;
+        }
+
+        is_packet_zerocopy = true;
+        tx_arg.opcode = TX_FILE;
+        for (size_t i = 0; i < num_pkts; i++) {
+            mem_buf_desc_t *pdesc = m_rx_pkt_ready_list_to_zc_send.get_and_pop_front();
+            piov[i].iov_base = pdesc->rx.frag.iov_base;
+            piov[i].iov_len = pdesc->rx.frag.iov_len;
+            mem_buf_arr[i] = pdesc;
+            if (pdesc->p_next_desc) {
+                si_tcp_logwarn("IFTAH - pdesc have next...");
+            }
+        }
+        tx_arg.attr.iov = piov;
+        tx_arg.attr.sz_iov = num_pkts;
+        tx_arg.attr.flags = MSG_ZEROCOPY; // Don't care, not used.
+        tx_arg.priv.attr = PBUF_DESC_FD;
+        p_iov = tx_arg.attr.iov;
+        sz_iov = num_pkts;
+    }
+
     if (unlikely(is_dummy) || unlikely(!is_packet_zerocopy) || unlikely(is_blocking)) {
         return tcp_tx_slow_path(tx_arg);
     }
@@ -1084,9 +1135,6 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
 
     si_tcp_logfunc("tx: iov=%p niovs=%zu", p_iov, sz_iov);
 
-    size_t total_iov_len =
-        std::accumulate(&p_iov[0], &p_iov[sz_iov], 0U,
-                        [](size_t sum, const iovec &curr) { return sum + curr.iov_len; });
     lock_tcp_con();
 
     if (unlikely(!is_connected_and_ready_to_send())) {
@@ -1107,6 +1155,12 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
         if ((tx_arg.priv.attr == PBUF_DESC_MKEY) && pd_key_array) {
             tx_arg.priv.mkey = pd_key_array[i].mkey;
         }
+
+        if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend && (tx_arg.priv.attr == PBUF_DESC_FD)) {
+            // Keep track of ix in zc iovec array for tx completion
+            // tx_arg.priv.zc_arr_ix = i; // iftah iov version 2
+            tx_arg.priv.mdesc = (void *)mem_buf_arr[i];
+        }
         unsigned pos = 0;
         while (pos < p_iov[i].iov_len) {
             unsigned tx_size = sndbuf_available();
@@ -1114,6 +1168,13 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
             if (tx_size == 0) {
                 // force out TCP data before going on wait()
                 tcp_output(&m_pcb);
+                if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend) {
+                    si_tcp_logerr("IFTAH - we dont handle this flow in ZC at the moment!");
+                    // we should not send anything and push front the whole pending zc data we
+                    // planned to send.
+                    total_tx = total_iov_len;
+                }
+
                 return tcp_tx_handle_sndbuf_unavailable(total_tx, is_dummy, is_non_file_zerocopy,
                                                         errno_tmp);
             }
@@ -1128,6 +1189,12 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
                 tx_size = total_iov_len;
             }
 
+            if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend &&
+                (size_t)tx_size < (p_iov[i].iov_len - pos)) {
+                si_tcp_logerr("IFTAH - we dont handle this flow in ZC at the moment!");
+                // we should not send anything and push front the whole pending zc data we planned
+                // to send.
+            }
             tx_size = std::min<size_t>(p_iov[i].iov_len - pos, tx_size);
             if (is_non_file_zerocopy) {
                 /*
@@ -1153,6 +1220,10 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
             pos += tx_size;
             total_tx += tx_size;
         }
+    }
+
+    if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend) {
+        total_tx = total_iov_len;
     }
 
     return tcp_tx_handle_done_and_unlock(total_tx, errno_tmp, is_dummy, is_non_file_zerocopy);
@@ -5247,6 +5318,13 @@ int sockinfo_tcp::rx_wait_helper(int &poll_count, bool blocking)
 mem_buf_desc_t *sockinfo_tcp::get_next_desc(mem_buf_desc_t *p_desc)
 {
     m_rx_pkt_ready_list.pop_front();
+
+    bool for_zc_send = m_l4_zc_proxy_peer_si && !m_is_l4_zc_proxy_frontend;
+
+    if (for_zc_send) {
+        m_l4_zc_proxy_peer_si->m_rx_pkt_ready_list_to_zc_send.push_back(p_desc);
+        p_desc->m_is_moved_to_zc_tx = true;
+    }
     IF_STATS(m_p_socket_stats->n_rx_ready_pkt_count--);
 
     m_n_rx_pkt_ready_list_count--;
@@ -5264,8 +5342,10 @@ mem_buf_desc_t *sockinfo_tcp::get_next_desc(mem_buf_desc_t *p_desc)
         prev->p_next_desc = nullptr;
         prev->rx.n_frags = 1;
         IF_STATS(m_p_socket_stats->n_rx_ready_pkt_count++);
-        reuse_buffer(prev);
-    } else {
+        if (!for_zc_send) {
+            reuse_buffer(prev);
+        }
+    } else if (!for_zc_send) {
         reuse_buffer(p_desc);
     }
     if (m_n_rx_pkt_ready_list_count) {
@@ -6281,7 +6361,6 @@ ssize_t sockinfo_tcp::tcp_tx_handle_done_and_unlock(ssize_t total_tx, int errno_
 
     /* Restore errno on function entry in case success */
     errno = errno_tmp;
-
     return total_tx;
 }
 

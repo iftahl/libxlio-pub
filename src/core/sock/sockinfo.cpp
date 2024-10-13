@@ -480,9 +480,31 @@ int sockinfo::setsockopt(int __level, int __optname, const void *__optval, sockl
 {
     size_t expected_len = 0U;
     int ret = SOCKOPT_PASS_TO_OS;
-
     if (__level == SOL_SOCKET) {
         switch (__optname) {
+        case SO_XLIO_L4_ZC_PROXY:
+            if (__optlen == sizeof(m_l4_zc_proxy_peer) && safe_mce_sys().l4_zc) {
+                sockinfo *p_upstream_peer = fd_collection_get_sockfd(*(int *)__optval);
+                m_l4_zc_proxy_peer_si = p_upstream_peer;
+                m_l4_zc_proxy_peer = *(int *)__optval;
+                m_is_l4_zc_proxy = true;
+                m_is_l4_zc_proxy_frontend = true;
+
+                //sockinfo *p_upstream_peer = fd_collection_get_sockfd(m_l4_zc_proxy_peer);
+                p_upstream_peer->m_l4_zc_proxy_peer_si = this;
+                p_upstream_peer->m_l4_zc_proxy_peer = m_fd;
+                p_upstream_peer->m_is_l4_zc_proxy = true;
+                p_upstream_peer->m_is_l4_zc_proxy_frontend = false;
+
+                si_loginfo("SO_XLIO_L4_ZC_PROXY: frontend fd=%d, backend fd=%d", m_fd,
+                           m_l4_zc_proxy_peer);
+
+                ret = SOCKOPT_INTERNAL_XLIO_SUPPORT;
+            } else {
+                ret = SOCKOPT_NO_XLIO_SUPPORT;
+                errno = EINVAL;
+            }
+            break;
         case SO_XLIO_USER_DATA:
             if (__optlen == sizeof(m_fd_context)) {
                 m_fd_context = *(void **)__optval;
