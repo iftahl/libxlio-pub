@@ -58,6 +58,7 @@
 #include "sock-redirect.h"
 #include "sock-app.h"
 #include "sock_stats.h"
+#include <stack>
 
 #ifndef BASE_SOCKINFO_H
 #define BASE_SOCKINFO_H
@@ -386,6 +387,7 @@ public:
     void set_rx_num_buffs_reuse(int val) { m_rx_num_buffs_reuse = val; }
 #endif
 #endif
+
 protected:
     static const char *setsockopt_so_opt_to_str(int opt);
 
@@ -582,7 +584,13 @@ protected:
 public:
 #if defined(DEFINED_NGINX) || defined(DEFINED_ENVOY)
     bool m_is_for_socket_pool = false; // true when this fd will be used for socket pool on close
+    bool m_is_l4_zc_proxy = false;
+    bool m_is_l4_zc_proxy_frontend = false;
     int m_back_log = 0;
+    int m_l4_zc_proxy_peer = -1;
+    sockinfo *m_l4_zc_proxy_peer_si = nullptr;
+    xlio_desc_list_t m_rx_pkt_ready_list_to_zc_send;
+
 #endif
 };
 
@@ -714,7 +722,9 @@ int sockinfo::dequeue_packet(iovec *p_iov, ssize_t sz_iov, sockaddr *__from, soc
                 if (nbytes > bytes_left) {
                     nbytes = bytes_left;
                 }
-                memcpy((char *)(p_iov[i].iov_base) + pos, iov_base, nbytes);
+                if (!(m_l4_zc_proxy_peer_si && !m_is_l4_zc_proxy_frontend)) {
+                    memcpy((char *)(p_iov[i].iov_base) + pos, iov_base, nbytes);
+                }
                 pos += nbytes;
                 total_rx += nbytes;
                 m_rx_pkt_ready_offset += nbytes;

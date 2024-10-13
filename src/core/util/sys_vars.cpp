@@ -1759,6 +1759,9 @@ void mce_sys_var::get_env_params()
     if ((env_ptr = getenv(SYS_VAR_CPS_WA_BIND_DEDICATED_IP)) != NULL) {
         cps_wa_bind_dedicated_ip = atoi(env_ptr) ? true : false;
     }
+    if ((env_ptr = getenv(SYS_VAR_L4_ZC)) != NULL) {
+        l4_zc = atoi(env_ptr) ? true : false;
+    }
 #if defined(DEFINED_NGINX)
     if ((env_ptr = getenv(SYS_VAR_NGINX_UDP_POOL_SIZE))) {
         nginx_udp_socket_pool_size = (uint32_t)atoi(env_ptr);

@@ -51,24 +51,6 @@ enum buffer_pool_type {
     BUFFER_POOL_TX,
 };
 
-inline static void free_lwip_pbuf(struct pbuf *lwip_pbuf)
-{
-    mem_buf_desc_t *p_desc = reinterpret_cast<mem_buf_desc_t *>(lwip_pbuf);
-
-    if (lwip_pbuf->desc.attr == PBUF_DESC_MDESC || lwip_pbuf->desc.attr == PBUF_DESC_NVME_TX) {
-        mem_desc *mdesc = reinterpret_cast<mem_desc *>(lwip_pbuf->desc.mdesc);
-        mdesc->put();
-    }
-
-    if (p_desc->m_flags & mem_buf_desc_t::ZCOPY) {
-        p_desc->tx.zc.callback(p_desc);
-    }
-    p_desc->m_flags = 0;
-    lwip_pbuf->flags = 0;
-    lwip_pbuf->ref = 0;
-    lwip_pbuf->desc.attr = PBUF_DESC_NONE;
-}
-
 /**
  * A buffer pool which internally sorts the buffers.
  */
@@ -151,5 +133,34 @@ extern buffer_pool *g_buffer_pool_rx_stride;
 extern buffer_pool *g_buffer_pool_rx_rwqe;
 extern buffer_pool *g_buffer_pool_tx;
 extern buffer_pool *g_buffer_pool_zc;
+
+inline static void free_lwip_pbuf(struct pbuf *lwip_pbuf)
+{
+    mem_buf_desc_t *p_desc = reinterpret_cast<mem_buf_desc_t *>(lwip_pbuf);
+
+    if (lwip_pbuf->desc.attr == PBUF_DESC_MDESC || lwip_pbuf->desc.attr == PBUF_DESC_NVME_TX) {
+        mem_desc *mdesc = reinterpret_cast<mem_desc *>(lwip_pbuf->desc.mdesc);
+        mdesc->put();
+    }
+
+    if (p_desc->m_flags & mem_buf_desc_t::ZCOPY) {
+        p_desc->tx.zc.callback(p_desc);
+    }
+
+    if (lwip_pbuf->desc.attr == PBUF_DESC_FD) {
+        if (lwip_pbuf->desc.mdesc) {
+            mem_buf_desc_t *rx_proxy = reinterpret_cast<mem_buf_desc_t *>(lwip_pbuf->desc.mdesc);
+            if (rx_proxy->dec_ref_count() <= 1 && (rx_proxy->lwip_pbuf.ref-- <= 1)) {
+                rx_proxy->m_is_moved_to_zc_tx = false;
+                g_buffer_pool_rx_ptr->put_buffer_after_deref_thread_safe(rx_proxy);
+            }
+        }
+    }
+
+    p_desc->m_flags = 0;
+    lwip_pbuf->flags = 0;
+    lwip_pbuf->ref = 0;
+    lwip_pbuf->desc.attr = PBUF_DESC_NONE;
+}
 
 #endif

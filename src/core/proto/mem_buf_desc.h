@@ -121,6 +121,14 @@ public:
     inline int inc_ref_count() { return atomic_fetch_and_inc(&n_ref_count); }
     inline int dec_ref_count() { return atomic_fetch_and_dec(&n_ref_count); }
     inline int add_ref_count(int x) { return atomic_fetch_add_relaxed(x, &n_ref_count); }
+
+    // inline int get_ref_count() const { return n_ref_count; }
+    // inline void reset_ref_count() { n_ref_count = 0; }
+    // inline void set_ref_count(int x) { n_ref_count = x; }
+    // inline int inc_ref_count() { return n_ref_count++; }
+    // inline int dec_ref_count() { return n_ref_count--; }
+    // inline int add_ref_count(int x) { int prev = n_ref_count;  n_ref_count+=x; return prev; }
+
     inline unsigned int lwip_pbuf_get_ref_count() const { return lwip_pbuf.ref; }
     inline unsigned int lwip_pbuf_inc_ref_count() { return ++lwip_pbuf.ref; }
     inline unsigned int lwip_pbuf_dec_ref_count()
@@ -238,6 +246,8 @@ public:
 
     atomic_t n_ref_count; // number of interested receivers (sockinfo) [can be modified only in
                           // cq_mgr_rx context]
+    // int n_ref_count;
+    bool m_is_moved_to_zc_tx = false;
     uint64_t unused_padding[2]; // Align the structure to the cache line boundary
 };
 
