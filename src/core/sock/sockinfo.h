@@ -581,7 +581,11 @@ protected:
 public:
 #if defined(DEFINED_NGINX) || defined(DEFINED_ENVOY)
     bool m_is_for_socket_pool = false; // true when this fd will be used for socket pool on close
+    bool m_is_l4_zc_proxy = false;
+    bool m_is_l4_zc_proxy_frontend = false;
     int m_back_log = 0;
+    int m_l4_zc_proxy_peer = -1;
+    xlio_desc_list_t m_rx_pkt_ready_list_to_zc_send;
 #endif
 };
 
@@ -701,6 +705,17 @@ int sockinfo::dequeue_packet(iovec *p_iov, ssize_t sz_iov, sockaddr *__from, soc
 #ifdef DEFINED_UTLS
         uint8_t tls_type = pdesc->rx.tls_type;
 #endif /* DEFINED_UTLS */
+        sockinfo *p_upstream_peer = nullptr;
+        if (sz_iov && pdesc) {
+            if (m_is_l4_zc_proxy && !m_is_l4_zc_proxy_frontend) {
+                p_upstream_peer = fd_collection_get_sockfd(m_l4_zc_proxy_peer);
+
+                // do we need both ref counts?..
+                pdesc->inc_ref_count();
+                pdesc->lwip_pbuf_inc_ref_count();
+                p_upstream_peer->m_rx_pkt_ready_list_to_zc_send.push_back(pdesc);
+            }
+        }
         for (int i = 0; i < sz_iov && pdesc; i++) {
             pos = 0;
             while (pos < p_iov[i].iov_len && pdesc) {
@@ -713,7 +728,9 @@ int sockinfo::dequeue_packet(iovec *p_iov, ssize_t sz_iov, sockaddr *__from, soc
                 if (nbytes > bytes_left) {
                     nbytes = bytes_left;
                 }
-                memcpy((char *)(p_iov[i].iov_base) + pos, iov_base, nbytes);
+                if (!p_upstream_peer) {
+                    memcpy((char *)(p_iov[i].iov_base) + pos, iov_base, nbytes);
+                }
                 pos += nbytes;
                 total_rx += nbytes;
                 m_rx_pkt_ready_offset += nbytes;
@@ -727,6 +744,12 @@ int sockinfo::dequeue_packet(iovec *p_iov, ssize_t sz_iov, sockaddr *__from, soc
                         pdesc = get_next_desc_peek(pdesc, rx_pkt_ready_list_idx);
                     } else {
                         pdesc = get_next_desc(pdesc);
+                        if (p_upstream_peer && pdesc) {
+                            // do we need both ref counts?..
+                            pdesc->inc_ref_count();
+                            pdesc->lwip_pbuf_inc_ref_count();
+                            p_upstream_peer->m_rx_pkt_ready_list_to_zc_send.push_back(pdesc);
+                        }
                     }
                     m_rx_pkt_ready_offset = 0;
                     if (pdesc) {

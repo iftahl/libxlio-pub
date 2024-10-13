@@ -483,6 +483,23 @@ int sockinfo::setsockopt(int __level, int __optname, const void *__optval, sockl
 
     if (__level == SOL_SOCKET) {
         switch (__optname) {
+        case SO_XLIO_L4_ZC_PROXY:
+            if (__optlen == sizeof(m_l4_zc_proxy_peer)) {
+                m_l4_zc_proxy_peer = *(int *)__optval;
+                m_is_l4_zc_proxy = true;
+                m_is_l4_zc_proxy_frontend = true;
+
+                sockinfo *p_upstream_peer = fd_collection_get_sockfd(m_l4_zc_proxy_peer);
+                p_upstream_peer->m_l4_zc_proxy_peer = m_fd;
+                p_upstream_peer->m_is_l4_zc_proxy = true;
+                p_upstream_peer->m_is_l4_zc_proxy_frontend = false;
+
+                ret = SOCKOPT_INTERNAL_XLIO_SUPPORT;
+            } else {
+                ret = SOCKOPT_NO_XLIO_SUPPORT;
+                errno = EINVAL;
+            }
+            break;
         case SO_XLIO_USER_DATA:
             if (__optlen == sizeof(m_fd_context)) {
                 m_fd_context = *(void **)__optval;

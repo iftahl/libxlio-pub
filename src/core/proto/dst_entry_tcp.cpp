@@ -245,9 +245,13 @@ ssize_t dst_entry_tcp::fast_send(const iovec *p_iov, const ssize_t sz_iov, xlio_
                      * PBUF_DESC_NONE - map should be initialized to NULL in
                      * dst_entry_tcp::get_buffer() object
                      */
-                    masked_addr = (void *)((uint64_t)m_sge[i].addr & m_user_huge_page_mask);
-                    m_sge[i].lkey =
-                        m_p_ring->get_tx_user_lkey(masked_addr, m_n_sysvar_user_huge_page_size);
+
+                    // For ZC proxy we PoC we will take regular tx lkey which is identical to rx
+                    m_sge[i].lkey = (i == 0 ? m_p_ring->get_tx_lkey(m_id) : m_sge[0].lkey);
+
+                    // masked_addr = (void *)((uint64_t)m_sge[i].addr & m_user_huge_page_mask);
+                    // m_sge[i].lkey =
+                    //     m_p_ring->get_tx_user_lkey(masked_addr, m_n_sysvar_user_huge_page_size);
                 }
             } else {
                 m_sge[i].lkey = (i == 0 ? m_p_ring->get_tx_lkey(m_id) : m_sge[0].lkey);

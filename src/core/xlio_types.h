@@ -57,6 +57,7 @@
 #define SCM_XLIO_PD              SO_XLIO_PD
 #define SCM_XLIO_NVME_PD         2823
 #define SO_XLIO_EXT_VLAN_TAG     2824
+#define SO_XLIO_L4_ZC_PROXY      3456
 
 /**
  * @def SO_XLIO_ISOLATE

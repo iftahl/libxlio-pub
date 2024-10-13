@@ -1074,6 +1074,58 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
     bool is_dummy = IS_DUMMY_PACKET(flags);
     bool is_blocking = BLOCK_THIS_RUN(m_b_blocking, flags);
     bool is_packet_zerocopy = (flags & MSG_ZEROCOPY) && ((m_b_zc) || (tx_arg.opcode == TX_FILE));
+
+    size_t total_iov_len =
+        std::accumulate(&p_iov[0], &p_iov[sz_iov], 0U,
+                        [](size_t sum, const iovec &curr) { return sum + curr.iov_len; });
+    iovec *piov[64];
+
+    if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend) {
+        size_t num_pkts = m_rx_pkt_ready_list_to_zc_send.size();
+        if (num_pkts > 63) {
+            si_tcp_logerr("num_pkts=%zu, more than 63. need to increase max iov array size!",
+                          num_pkts);
+            sleep(1);
+        }
+
+        if (!num_pkts) {
+            // We don't have something to send now.
+            // Maybe we sent more zc data than requested last time.
+            si_tcp_logwarn("Don't have ZC proxy data.\nniovs=%zu, total_iov_len=%zu", sz_iov,
+                           total_iov_len);
+
+            // Do we want to ignore this Tx and return total_iov_len?
+            return total_iov_len;
+        }
+
+        // Send all ZC data avail
+        is_packet_zerocopy = true;
+        tx_arg.opcode = TX_FILE;
+
+        for (int i = 0; i < num_pkts; i++) {
+            mem_buf_desc_t *pdesc = m_rx_pkt_ready_list_to_zc_send.get_and_pop_front();
+            piov[i]->iov_base = (uint8_t *)pdesc->rx.frag.iov_base;
+            piov[i]->iov_len = pdesc->rx.frag.iov_len;
+        }
+        tx_arg.attr.iov = piov;
+        tx_arg.attr.sz_iov = num_pkts;
+        tx_arg.attr.flags = MSG_ZEROCOPY;
+        tx_arg.priv.attr = PBUF_DESC_FD;
+
+        // void *iov_base = (uint8_t *)pdesc->rx.frag.iov_base + m_rx_pkt_ready_offset;
+        // size_t bytes_left = pdesc->rx.frag.iov_len - m_rx_pkt_ready_offset;
+
+        // piov[0].iov_base = (char *)mapping->m_addr + cur_offset;
+        // piov[0].iov_len = count;
+        // tx_arg.opcode = TX_FILE;
+        // tx_arg.attr.iov = piov;
+        // tx_arg.attr.sz_iov = 1;
+        // tx_arg.attr.flags = MSG_ZEROCOPY;
+        // tx_arg.priv.attr = PBUF_DESC_MDESC;
+        // tx_arg.priv.mdesc = (void *)mapping;
+        // totSent = p_socket_object->tx(tx_arg);
+    }
+
     if (unlikely(is_dummy) || unlikely(!is_packet_zerocopy) || unlikely(is_blocking)) {
         return tcp_tx_slow_path(tx_arg);
     }
@@ -1084,9 +1136,6 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
 
     si_tcp_logfunc("tx: iov=%p niovs=%zu", p_iov, sz_iov);
 
-    size_t total_iov_len =
-        std::accumulate(&p_iov[0], &p_iov[sz_iov], 0U,
-                        [](size_t sum, const iovec &curr) { return sum + curr.iov_len; });
     lock_tcp_con();
 
     if (unlikely(!is_connected_and_ready_to_send())) {
@@ -1114,6 +1163,9 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
             if (tx_size == 0) {
                 // force out TCP data before going on wait()
                 tcp_output(&m_pcb);
+                if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend) {
+                    total_tx = total_iov_len;
+                }
                 return tcp_tx_handle_sndbuf_unavailable(total_tx, is_dummy, is_non_file_zerocopy,
                                                         errno_tmp);
             }
@@ -1153,6 +1205,10 @@ ssize_t sockinfo_tcp::tcp_tx(xlio_tx_call_attr_t &tx_arg)
             pos += tx_size;
             total_tx += tx_size;
         }
+    }
+
+    if (m_is_l4_zc_proxy && m_is_l4_zc_proxy_frontend) {
+        total_tx = total_iov_len;
     }
 
     return tcp_tx_handle_done_and_unlock(total_tx, errno_tmp, is_dummy, is_non_file_zerocopy);
