@@ -134,11 +134,22 @@ extern buffer_pool *g_buffer_pool_rx_rwqe;
 extern buffer_pool *g_buffer_pool_tx;
 extern buffer_pool *g_buffer_pool_zc;
 
+[[maybe_unused]] static void free_zc_mem_desc(mem_buf_desc_t *p_desc)
+{
+    if (p_desc->dec_ref_count() <= 1 && (p_desc->lwip_pbuf.ref-- <= 1)) {
+        // printf("IFTAH - ref count ok, and calling put_buffer_after_deref_thread_safe for %p\n",
+        // (void*)p_desc);
+        p_desc->m_is_moved_to_zc_tx = false;
+        g_buffer_pool_rx_ptr->put_buffer_after_deref_thread_safe(p_desc);
+    }
+}
+
 inline static void free_lwip_pbuf(struct pbuf *lwip_pbuf)
 {
     mem_buf_desc_t *p_desc = reinterpret_cast<mem_buf_desc_t *>(lwip_pbuf);
 
     if (lwip_pbuf->desc.attr == PBUF_DESC_MDESC || lwip_pbuf->desc.attr == PBUF_DESC_NVME_TX) {
+        // printf("IFTAH - free_lwip_pbuf %p\n", (void*)p_desc);
         mem_desc *mdesc = reinterpret_cast<mem_desc *>(lwip_pbuf->desc.mdesc);
         mdesc->put();
     }

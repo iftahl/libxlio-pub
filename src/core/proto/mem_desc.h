@@ -84,6 +84,30 @@ public:
     }
 };
 
+class mem_desc_l4_zc : public mem_desc {
+public:
+    mem_desc_l4_zc(mem_buf_desc_t *desc)
+        : p_buff(desc)
+    {
+        atomic_set(&m_ref, 0);
+    }
+
+    void get(void) { atomic_fetch_and_inc(&m_ref); }
+    void put(void);
+    uint32_t get_lkey(mem_buf_desc_t *desc, ib_ctx_handler *ib_ctx, const void *addr, size_t len)
+    {
+        NOT_IN_USE(desc);
+        NOT_IN_USE(ib_ctx);
+        NOT_IN_USE(addr);
+        NOT_IN_USE(len);
+        return LKEY_TX_DEFAULT;
+    }
+
+private:
+    atomic_t m_ref;
+    mem_buf_desc_t *p_buff = nullptr;
+};
+
 class mem_desc_compose : public mem_desc {
 public:
     mem_desc_compose()

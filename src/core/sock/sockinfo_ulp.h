@@ -70,8 +70,10 @@ public:
         return ERR_OK;
     };
 
-protected:
-    sockinfo_tcp *const m_p_sock;
+    sockinfo_tcp *m_p_sock;
+
+    // protected:
+    //     sockinfo_tcp *const m_p_sock;
 };
 
 #ifdef DEFINED_UTLS

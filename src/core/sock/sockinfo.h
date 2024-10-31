@@ -723,8 +723,12 @@ int sockinfo::dequeue_packet(iovec *p_iov, ssize_t sz_iov, sockaddr *__from, soc
                     nbytes = bytes_left;
                 }
                 if (!(m_l4_zc_proxy_peer_si && !m_is_l4_zc_proxy_frontend)) {
+                    // printf("Used memcpy fd=%d\n", m_fd);
                     memcpy((char *)(p_iov[i].iov_base) + pos, iov_base, nbytes);
                 }
+                // else {
+                //     printf("Skipped memcpy fd=%d\n", m_fd);
+                // }
                 pos += nbytes;
                 total_rx += nbytes;
                 m_rx_pkt_ready_offset += nbytes;

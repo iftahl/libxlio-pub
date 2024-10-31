@@ -40,6 +40,8 @@
 #include <endian.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include "fd_collection.h"
+#include <numeric>
 
 #define MODULE_NAME "si_ulp"
 
@@ -252,6 +254,7 @@ public:
     uint32_t get_lkey(mem_buf_desc_t *desc, ib_ctx_handler *ib_ctx, const void *addr,
                       size_t len) override
     {
+        // return LKEY_TX_DEFAULT;
         const uintptr_t uaddr = (uintptr_t)addr;
         const uintptr_t ubuf = (uintptr_t)m_p_buf->p_buffer;
 
@@ -478,6 +481,28 @@ int sockinfo_tcp_ops_tls::setsockopt(int __level, int __optname, const void *__o
     unsigned char *key;
     uint32_t keylen;
     const struct tls_crypto_info *base_info = (const struct tls_crypto_info *)__optval;
+
+    if (__level == SOL_SOCKET && __optname == SO_XLIO_L4_ZC_PROXY) {
+        if (safe_mce_sys().l4_zc) {
+            sockinfo *p_upstream_peer = fd_collection_get_sockfd(*(int *)__optval);
+            m_p_sock->m_l4_zc_proxy_peer_si = p_upstream_peer;
+            m_p_sock->m_l4_zc_proxy_peer = *(int *)__optval;
+            m_p_sock->m_is_l4_zc_proxy = true;
+            m_p_sock->m_is_l4_zc_proxy_frontend = true;
+
+            p_upstream_peer->m_l4_zc_proxy_peer_si = m_p_sock;
+            p_upstream_peer->m_l4_zc_proxy_peer = m_p_sock->get_fd();
+            p_upstream_peer->m_is_l4_zc_proxy = true;
+            p_upstream_peer->m_is_l4_zc_proxy_frontend = false;
+            si_ulp_loginfo("SO_XLIO_L4_ZC_PROXY: frontend fd=%d, backend fd=%d", m_p_sock->get_fd(),
+                           m_p_sock->m_l4_zc_proxy_peer);
+            return 0;
+        } else {
+            si_ulp_loginfo("Try to use ZC PoC, but XLIO_L4_ZC=0");
+            errno = EINVAL;
+            return -1;
+        }
+    }
 
     if (__level != SOL_TLS) {
         return m_p_sock->tcp_setsockopt(__level, __optname, __optval, __optlen);
@@ -734,6 +759,48 @@ ssize_t sockinfo_tcp_ops_tls::tx(xlio_tx_call_attr_t &tx_arg)
 
     errno_save = errno;
 
+    p_iov = tx_arg.attr.iov;
+    size_t total_iov_len =
+        std::accumulate(&p_iov[0], &p_iov[tx_arg.attr.sz_iov], 0U,
+                        [](size_t sum, const iovec &curr) { return sum + curr.iov_len; });
+    iovec piov[64];
+    mem_buf_desc_t *mem_buf_arr[64];
+    if (m_p_sock->m_is_l4_zc_proxy && m_p_sock->m_is_l4_zc_proxy_frontend) {
+        size_t num_pkts = m_p_sock->m_rx_pkt_ready_list_to_zc_send.size();
+        if (num_pkts > 63) {
+            si_ulp_logerr("num_pkts=%zu, more than 63. need to increase max iov array size!",
+                          num_pkts);
+            sleep(1);
+        }
+
+        if (!num_pkts) {
+            // We don't have something to send now.
+            // Maybe we sent more zc data than requested last time.
+            // si_ulp_logwarn("Don't have ZC proxy data.\nniovs=%zu, total_iov_len=%zu", sz_iov,
+            //                total_iov_len);
+
+            // Do we want to ignore this Tx and return total_iov_len?
+            return total_iov_len;
+        }
+
+        is_zerocopy = true;
+        tx_arg.opcode = TX_FILE;
+        for (size_t i = 0; i < num_pkts; i++) {
+            mem_buf_desc_t *pdesc = m_p_sock->m_rx_pkt_ready_list_to_zc_send.get_and_pop_front();
+            piov[i].iov_base = pdesc->rx.frag.iov_base;
+            piov[i].iov_len = pdesc->rx.frag.iov_len;
+            mem_buf_arr[i] = pdesc;
+            if (pdesc->p_next_desc) {
+                si_ulp_logerr("IFTAH - pdesc have next...");
+            }
+        }
+        tx_arg.attr.iov = piov;
+        tx_arg.attr.sz_iov = num_pkts;
+        tx_arg.attr.flags = MSG_ZEROCOPY; // Don't care, not used.
+        tx_arg.priv.attr = PBUF_DESC_FD;
+        p_iov = tx_arg.attr.iov;
+    }
+
     tls_arg.opcode = TX_FILE; /* Not to use hugepage zerocopy path */
     tls_arg.attr.flags = MSG_ZEROCOPY;
     tls_arg.xlio_flags = TX_FLAG_NO_PARTIAL_WRITE;
@@ -741,7 +808,6 @@ ssize_t sockinfo_tcp_ops_tls::tx(xlio_tx_call_attr_t &tx_arg)
     tls_arg.attr.sz_iov = is_zerocopy ? 3 : 1;
     tls_arg.priv.attr = PBUF_DESC_MDESC;
 
-    p_iov = tx_arg.attr.iov;
     last_recno = m_next_recno_tx;
     ret = 0;
 
@@ -761,6 +827,10 @@ ssize_t sockinfo_tcp_ops_tls::tx(xlio_tx_call_attr_t &tx_arg)
     uint8_t *iv = is_tx_tls13() ? nullptr : m_tls_info_tx.iv;
     mem_desc *zc_owner = is_zerocopy ? reinterpret_cast<mem_desc *>(tx_arg.priv.mdesc) : nullptr;
     for (ssize_t i = 0; i < tx_arg.attr.sz_iov; ++i) {
+        if (m_p_sock->m_is_l4_zc_proxy && m_p_sock->m_is_l4_zc_proxy_frontend &&
+            (tx_arg.priv.attr == PBUF_DESC_FD)) {
+            zc_owner = new mem_desc_l4_zc(mem_buf_arr[i]);
+        }
         pos = 0;
         while (pos < p_iov[i].iov_len) {
             tls_record *rec;
@@ -768,6 +838,10 @@ ssize_t sockinfo_tcp_ops_tls::tx(xlio_tx_call_attr_t &tx_arg)
             size_t tosend = std::min<size_t>(p_iov[i].iov_len - pos, TLS_RECORD_MAX);
 
             if (m_p_sock->sndbuf_available() == 0U && !block_this_run) {
+                if (m_p_sock->m_is_l4_zc_proxy && m_p_sock->m_is_l4_zc_proxy_frontend) {
+                    si_ulp_logerr("IFTAH - no send buffer, this case is not handled!");
+                }
+
                 if (ret == 0) {
                     errno = EAGAIN;
                     ret = -1;
@@ -815,6 +889,9 @@ ssize_t sockinfo_tcp_ops_tls::tx(xlio_tx_call_attr_t &tx_arg)
                                                 reinterpret_cast<void *>(rec));
 
             } else {
+                if (m_p_sock->m_is_l4_zc_proxy && m_p_sock->m_is_l4_zc_proxy_frontend) {
+                    si_ulp_logerr("IFTAH - block_this_run=1, this case is not handled!");
+                }
                 ret2 = m_p_sock->tcp_tx(tls_arg);
             }
             if (block_this_run && (ret2 != (ssize_t)tls_arg.attr.iov[0].iov_len)) {
@@ -847,6 +924,9 @@ ssize_t sockinfo_tcp_ops_tls::tx(xlio_tx_call_attr_t &tx_arg)
                  * the reference and in case if TCP layer silently queues TCP segments,
                  * the record will be destroyed only when the last pbuf is freed.
                  */
+                if (m_p_sock->m_is_l4_zc_proxy && m_p_sock->m_is_l4_zc_proxy_frontend) {
+                    si_ulp_logerr("IFTAH - ret2 < 0, this case is not handled!");
+                }
                 rec->put();
                 --m_next_recno_tx;
                 goto done;
@@ -862,6 +942,10 @@ ssize_t sockinfo_tcp_ops_tls::tx(xlio_tx_call_attr_t &tx_arg)
         }
     }
 done:
+
+    if (m_p_sock->m_is_l4_zc_proxy && m_p_sock->m_is_l4_zc_proxy_frontend) {
+        ret = total_iov_len;
+    }
 
     /* Statistics */
     if (ret > 0) {

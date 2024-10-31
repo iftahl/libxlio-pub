@@ -35,6 +35,17 @@
 #include "core/dev/ib_ctx_handler.h"
 #include "core/proto/mem_desc.h"
 #include "core/util/sys_vars.h"
+#include "dev/buffer_pool.h"
+
+void mem_desc_l4_zc::put()
+{
+    int ref = atomic_fetch_and_dec(&m_ref);
+    if (ref == 1) {
+        // printf("IFTAH calling free_zc_mem_desc and deleting this=%p\n", (void*)this);
+        free_zc_mem_desc(p_buff);
+        delete this;
+    }
+}
 
 uint32_t zcopy_hugepage::get_lkey(mem_buf_desc_t *desc, ib_ctx_handler *ib_ctx, const void *addr,
                                   size_t len)
