@@ -22,7 +22,7 @@ CLEANFILES = $(BUILT_SOURCES)
 dist-hook:
 	cd $(distdir); rm -f $(BUILT_SOURCES)
 
-SUBDIRS = infra netlink
+SUBDIRS = util/yaml-cpp infra netlink
 
 EXTRA_DIST = \
 	util/libxlio.conf
@@ -57,6 +57,7 @@ libxlio_la_LDFLAGS := $(XLIO_LTO) $(XLIO_PROFILE) -no-undefined \
 
 libxlio_la_LIBADD = \
 	-lrt -ldl -lpthread $(LIBNL_LIBS) $(VERBS_LIBS) $(DPCP_LIBS) $(DOCA_LIBS) $(XLIO_GCOV) \
+	$(top_builddir)/src/core/util/yaml-cpp/libyaml-cpp.la \
 	$(top_builddir)/src/utils/libutils.la \
 	$(top_builddir)/src/vlogger/libvlogger.la \
 	$(top_builddir)/src/state_machine/libstate_machine.la \
@@ -316,6 +317,7 @@ libxlio_la_SOURCES := \
 	xlio_types.h
 
 libxlio_la_DEPENDENCIES = \
+	$(top_builddir)/src/core/util/yaml-cpp/libyaml-cpp.la \
 	$(top_builddir)/src/vlogger/libvlogger.la \
 	$(top_builddir)/src/state_machine/libstate_machine.la \
 	$(top_builddir)/src/stats/libstats.la \

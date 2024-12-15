@@ -389,6 +389,7 @@ AC_CONFIG_FILES([
 		Makefile
 		src/Makefile
 		src/core/Makefile
+		src/core/util/yaml-cpp/Makefile
 		src/core/infra/Makefile
 		src/core/netlink/Makefile
 		src/utils/Makefile
